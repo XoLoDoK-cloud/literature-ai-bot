@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 
 class SimpleDatabase:
@@ -60,11 +60,11 @@ class SimpleDatabase:
         
         # Сохраняем выбранного автора
         data["selected_author"] = author_key
-        data["message_count"] += 1
+        data["message_count"] = len(data["conversation_history"]) // 2
         
-        # Ограничиваем историю 20 сообщениями
-        if len(data["conversation_history"]) > 20:
-            data["conversation_history"] = data["conversation_history"][-20:]
+        # Ограничиваем историю 10 сообщениями
+        if len(data["conversation_history"]) > 10:
+            data["conversation_history"] = data["conversation_history"][-10:]
         
         self.save_user_data(user_id, data)
     
@@ -72,6 +72,7 @@ class SimpleDatabase:
         """Сбросить диалог"""
         data = self.get_user_data(user_id)
         data["conversation_history"] = []
+        data["message_count"] = 0
         self.save_user_data(user_id, data)
 
 # Глобальный экземпляр
