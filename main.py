@@ -9,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # Конфигурация
 from config import BOT_TOKEN
 
-# Импорт обработчиков - ВАЖНО: правильное написание!
+# Импорт обработчиков
 from handlers.start_handler import router as start_router
 from handlers.author_handler import router as author_router
 from handlers.chat_handler import router as chat_router
