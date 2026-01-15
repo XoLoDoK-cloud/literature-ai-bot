@@ -1,3 +1,12 @@
+import asyncio
+from aiogram import Router, F
+from aiogram.types import Message
+from aiogram.enums import ParseMode
+
+from keyboards.inline_keyboards import get_chat_keyboard, AUTHORS
+from services.database import db
+from services.gemini_client import gemini_client
+
 @router.message(F.text)
 async def handle_message(message: Message):
     """Обработка текстовых сообщений"""
