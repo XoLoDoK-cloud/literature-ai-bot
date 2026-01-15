@@ -90,10 +90,12 @@ async def about_author(callback: CallbackQuery):
     
     author = AUTHORS[author_key]
     
+    # Отправляем информацию ОТДЕЛЬНЫМ сообщением
     await callback.message.answer(
         f"<b>{author['name']}</b>\n"
         f"<i>{author['description']}</i>\n\n"
         "Задавайте вопросы о жизни и творчестве этого писателя.",
+        reply_markup=get_chat_keyboard(),  # Возвращаем кнопки управления
         parse_mode=ParseMode.HTML
     )
     await callback.answer()
