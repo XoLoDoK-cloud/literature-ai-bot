@@ -9,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # Конфигурация
 from config import BOT_TOKEN
 
-# Импорт обработчиков
+# Импорт обработчиков - ВАЖНО: правильное написание!
 from handlers.start_handler import router as start_router
 from handlers.author_handler import router as author_router
 from handlers.chat_handler import router as chat_router
@@ -50,10 +50,6 @@ async def main():
     # Логирование запуска
     logger.info("=" * 50)
     logger.info("🚀 ЗАПУСК ЛИТЕРАТУРНОГО БОТА")
-    logger.info("=" * 50)
-    logger.info(f"🤖 Токен бота: {BOT_TOKEN[:15]}...")
-    logger.info("📚 Количество обработчиков: 3")
-    logger.info("⚡ Режим: Polling")
     logger.info("=" * 50)
     
     try:
