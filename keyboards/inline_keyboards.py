@@ -6,42 +6,27 @@ AUTHORS = {
     "pushkin": {
         "name": "Александр Пушкин",
         "emoji": "🖋️",
-        "description": "Великий русский поэт (1799-1837)"
+        "description": "Великий русский поэт"
     },
     "dostoevsky": {
         "name": "Фёдор Достоевский",
         "emoji": "📚",
-        "description": "Русский писатель и философ (1821-1881)"
+        "description": "Русский писатель и философ"
     },
     "tolstoy": {
         "name": "Лев Толстой", 
         "emoji": "✍️",
-        "description": "Русский писатель и мыслитель (1828-1910)"
+        "description": "Русский писатель и мыслитель"
     },
     "gogol": {
         "name": "Николай Гоголь",
         "emoji": "👻",
-        "description": "Русский прозаик и драматург (1809-1852)"
+        "description": "Русский прозаик и драматург"
     },
     "chekhov": {
         "name": "Антон Чехов",
         "emoji": "🏥", 
-        "description": "Русский писатель и врач (1860-1904)"
-    },
-    "esenin": {
-        "name": "Сергей Есенин",
-        "emoji": "🌾",
-        "description": "Русский поэт (1895-1925)"
-    },
-    "bulgakov": {
-        "name": "Михаил Булгаков",
-        "emoji": "🐱",
-        "description": "Русский писатель и драматург (1891-1940)"
-    },
-    "akhmatova": {
-        "name": "Анна Ахматова",
-        "emoji": "🎭",
-        "description": "Русская поэтесса (1889-1966)"
+        "description": "Русский писатель и врач"
     }
 }
 
@@ -66,7 +51,6 @@ def get_chat_keyboard() -> InlineKeyboardMarkup:
         ("👥 Сменить автора", "change_author"),
         ("🔄 Новый диалог", "reset_chat"),
         ("ℹ️ О писателе", "about_author"),
-        ("📚 Все авторы", "all_authors"),
         ("❓ Помощь", "help")
     ]
     
@@ -74,17 +58,4 @@ def get_chat_keyboard() -> InlineKeyboardMarkup:
         builder.add(InlineKeyboardButton(text=text, callback_data=callback))
     
     builder.adjust(2)  # 2 кнопки в ряд
-    return builder.as_markup()
-
-def get_main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Основное меню"""
-    builder = InlineKeyboardBuilder()
-    
-    builder.add(
-        InlineKeyboardButton(text="📚 Выбрать писателя", callback_data="select_author"),
-        InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
-        InlineKeyboardButton(text="📊 Статистика", callback_data="stats")
-    )
-    
-    builder.adjust(1)  # Все кнопки в столбец
     return builder.as_markup()
