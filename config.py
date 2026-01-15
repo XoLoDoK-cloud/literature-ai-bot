@@ -9,8 +9,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Проверка
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не найден! Добавьте в Railway Variables")
+    raise ValueError("❌ BOT_TOKEN не найден!")
 if not GEMINI_API_KEY:
-    raise ValueError("❌ GEMINI_API_KEY не найден! Добавьте в Railway Variables")
+    print("⚠️ GEMINI_API_KEY не найден, будут использоваться заглушки")
 
 print("✅ Конфигурация загружена")
