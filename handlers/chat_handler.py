@@ -7,12 +7,12 @@ from keyboards.inline_keyboards import get_chat_keyboard, AUTHORS
 from services.database import db
 from services.gemini_client import gemini_client
 
-# ИНИЦИАЛИЗИРУЕМ РОУТЕР (этой строки не хватало!)
+# ИНИЦИАЛИЗИРУЕМ РОУТЕР ДЛЯ TELEGRAM БОТА
 router = Router()
 
 @router.message(F.text)
 async def handle_message(message: Message):
-    """Обработка текстовых сообщений"""
+    """Обработка текстовых сообщений для Telegram бота"""
     user_id = message.from_user.id
     user_data = db.get_user_data(user_id)
     
@@ -58,14 +58,14 @@ async def handle_message(message: Message):
         # Удаляем сообщение "печатает"
         await typing_msg.delete()
         
-        # 1. Отправляем ответ персонажа (ТОЛЬКО ответ)
+        # 1. Отправляем ответ персонажа (ТОЛЬКО ответ, без кнопок)
         await message.answer(
             f"<b>{author['emoji']} {author['name']}:</b>\n\n{response}",
             parse_mode=ParseMode.HTML,
-            reply_markup=None  # Важно: без кнопок в ответе персонажа
+            reply_markup=None  # Важно: никаких кнопок в ответе персонажа
         )
         
-        # 2. Ждем немного и отправляем кнопки управления отдельно
+        # 2. Отдельным сообщением отправляем кнопки управления
         await asyncio.sleep(0.3)
         await message.answer(
             "👇 <b>Что дальше?</b>",
@@ -80,7 +80,7 @@ async def handle_message(message: Message):
         except:
             pass
         
-        print(f"❌ Ошибка в chat_handler: {e}")  # Логируем ошибку
+        print(f"❌ Ошибка в handle_message: {e}")
         await message.answer(
             "❌ <b>Произошла ошибка</b>\n\n"
             "Попробуйте:\n"
