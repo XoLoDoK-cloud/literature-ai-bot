@@ -44,7 +44,7 @@ def get_authors_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def get_chat_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура во время диалога"""
+    """Клавиатура во время диалога - ТОЛЬКО 4 КНОПКИ"""
     builder = InlineKeyboardBuilder()
     
     buttons = [
