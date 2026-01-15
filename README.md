@@ -1,1 +1,1 @@
-# LiteraryAIAssistBot_telegram
+# literature-ai-bot
