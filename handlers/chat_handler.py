@@ -7,6 +7,9 @@ from keyboards.inline_keyboards import get_chat_keyboard, AUTHORS
 from services.database import db
 from services.gemini_client import gemini_client
 
+# ИНИЦИАЛИЗИРУЕМ РОУТЕР (этой строки не хватало!)
+router = Router()
+
 @router.message(F.text)
 async def handle_message(message: Message):
     """Обработка текстовых сообщений"""
@@ -58,11 +61,12 @@ async def handle_message(message: Message):
         # 1. Отправляем ответ персонажа (ТОЛЬКО ответ)
         await message.answer(
             f"<b>{author['emoji']} {author['name']}:</b>\n\n{response}",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=None  # Важно: без кнопок в ответе персонажа
         )
         
         # 2. Ждем немного и отправляем кнопки управления отдельно
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
         await message.answer(
             "👇 <b>Что дальше?</b>",
             reply_markup=get_chat_keyboard(),
@@ -76,7 +80,7 @@ async def handle_message(message: Message):
         except:
             pass
         
-        print(f"❌ Ошибка: {e}")  # Логируем ошибку
+        print(f"❌ Ошибка в chat_handler: {e}")  # Логируем ошибку
         await message.answer(
             "❌ <b>Произошла ошибка</b>\n\n"
             "Попробуйте:\n"
