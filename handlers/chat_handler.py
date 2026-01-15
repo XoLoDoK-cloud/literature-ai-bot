@@ -1,13 +1,3 @@
-from aiogram import Router, F
-from aiogram.types import Message
-from aiogram.enums import ParseMode
-
-from keyboards.inline_keyboards import get_chat_keyboard, AUTHORS
-from services.database import db
-from services.gemini_client import gemini_client
-
-router = Router()
-
 @router.message(F.text)
 async def handle_message(message: Message):
     """Обработка текстовых сообщений"""
@@ -56,21 +46,19 @@ async def handle_message(message: Message):
         # Удаляем сообщение "печатает"
         await typing_msg.delete()
         
-        # ===== ИСПРАВЛЕНИЕ: Отделяем ответ персонажа от интерфейса =====
-        
-        # 1. Сначала отправляем ответ персонажа
+        # 1. Отправляем ответ персонажа (ТОЛЬКО ответ)
         await message.answer(
             f"<b>{author['emoji']} {author['name']}:</b>\n\n{response}",
             parse_mode=ParseMode.HTML
         )
         
-        # 2. Отдельным сообщением отправляем инструкцию с кнопками
+        # 2. Ждем немного и отправляем кнопки управления отдельно
+        await asyncio.sleep(0.5)
         await message.answer(
             "👇 <b>Что дальше?</b>",
             reply_markup=get_chat_keyboard(),
             parse_mode=ParseMode.HTML
         )
-        # ===== КОНЕЦ ИСПРАВЛЕНИЯ =====
         
     except Exception as e:
         # Удаляем сообщение "печатает" в случае ошибки
@@ -79,11 +67,13 @@ async def handle_message(message: Message):
         except:
             pass
         
+        print(f"❌ Ошибка: {e}")  # Логируем ошибку
         await message.answer(
             "❌ <b>Произошла ошибка</b>\n\n"
             "Попробуйте:\n"
             "1. Перезапустить бота: /start\n"
             "2. Задать вопрос иначе\n"
             "3. Подождать несколько минут",
+            reply_markup=get_chat_keyboard(),
             parse_mode=ParseMode.HTML
         )
