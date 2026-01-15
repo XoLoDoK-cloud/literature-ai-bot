@@ -59,8 +59,8 @@ async def handle_message(message: Message):
         # Отправляем ответ пользователю
         await message.answer(
             f"<b>{author['emoji']} {author['name']}:</b>\n\n"
-            f"<blockquote>{response}</blockquote>\n\n"
-            f"<i>Задайте следующий вопрос или используйте меню:</i>",
+            f"{response}\n\n"
+            f"<i>Задайте следующий вопрос:</i>",
             reply_markup=get_chat_keyboard(),
             parse_mode=ParseMode.HTML
         )
@@ -72,17 +72,11 @@ async def handle_message(message: Message):
         except:
             pass
         
-        error_message = f"""
-❌ <b>Произошла ошибка:</b>
-
-{str(e)[:100]}
-
-Попробуйте:
-1. Перезапустить бота: /start
-2. Задать вопрос иначе
-3. Подождать несколько минут
-
-Если ошибка повторяется, сообщите разработчику.
-"""
-        
-        await message.answer(error_message, parse_mode=ParseMode.HTML)
+        await message.answer(
+            "❌ <b>Произошла ошибка</b>\n\n"
+            "Попробуйте:\n"
+            "1. Перезапустить бота: /start\n"
+            "2. Задать вопрос иначе\n"
+            "3. Подождать несколько минут",
+            parse_mode=ParseMode.HTML
+        )
