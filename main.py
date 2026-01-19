@@ -263,6 +263,132 @@ async def toggle_gigachad(callback: CallbackQuery):
     
     await callback.answer()
 
+# После существующих обработчиков добавляем:
+
+@router.callback_query(F.data == "authors_gallery")
+async def show_authors_gallery(callback: CallbackQuery):
+    """Показывает галерею портретов авторов"""
+    await callback.message.edit_text(
+        "🖼️ <b>ГАЛЕРЕЯ ПОРТРЕТОВ АВТОРОВ</b>\n\n"
+        "Нажмите на кнопку ниже, чтобы увидеть портрет писателя:",
+        reply_markup=get_author_gallery_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_authors")
+async def back_to_authors(callback: CallbackQuery):
+    """Возврат к выбору авторов"""
+    await callback.message.edit_text(
+        "📚 <b>ВЫБЕРИТЕ СОБЕСЕДНИКА:</b>\n\n"
+        "С кем хотите побеседовать сегодня?",
+        reply_markup=get_authors_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "quiz_start")
+async def start_quiz_menu(callback: CallbackQuery):
+    """Меню выбора викторины"""
+    await callback.message.answer(
+        "🎯 <b>ЛИТЕРАТУРНАЯ ВИКТОРИНА</b>\n\n"
+        "Проверьте свои знания о русской классике!\n\n"
+        "<b>Выберите сложность:</b>",
+        reply_markup=get_quiz_start_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("quiz_"))
+async def handle_quiz(callback: CallbackQuery):
+    """Обработчик викторины"""
+    action = callback.data
+    
+    if action in ["quiz_easy", "quiz_medium", "quiz_hard"]:
+        difficulty = action.split("_")[1]
+        question = quiz_service.start_quiz(callback.from_user.id, difficulty)
+        
+        if question:
+            await callback.message.answer(
+                f"🎯 <b>ВОПРОС {question['number']}/{question['total']}</b>\n"
+                f"<i>Сложность: {question['difficulty'].upper()}</i>\n\n"
+                f"<b>{question['question']}</b>\n",
+                reply_markup=get_quiz_question_keyboard(question['options']),
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await callback.message.answer("❌ Не удалось начать викторину")
+    
+    elif action.startswith("quiz_answer_"):
+        answer_index = int(action.split("_")[2])
+        is_correct, correct_answer = quiz_service.answer_question(callback.from_user.id, answer_index)
+        
+        if is_correct:
+            await callback.answer("✅ Правильно!", show_alert=True)
+        else:
+            await callback.answer(f"❌ Неправильно! Правильный ответ: {correct_answer}", show_alert=True)
+        
+        # Получаем следующий вопрос
+        next_question = quiz_service.get_current_question(callback.from_user.id)
+        
+        if next_question:
+            await callback.message.answer(
+                f"🎯 <b>ВОПРОС {next_question['number']}/{next_question['total']}</b>\n\n"
+                f"<b>{next_question['question']}</b>\n",
+                reply_markup=get_quiz_question_keyboard(next_question['options']),
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            # Викторина завершена
+            results = quiz_service.finish_quiz(callback.from_user.id)
+            
+            results_text = f"""
+🏆 <b>ВИКТОРИНА ЗАВЕРШЕНА!</b>
+<code>{'═' * 35}</code>
+
+📊 <b>Результаты:</b>
+✅ Правильных ответов: {results['correct_answers']}/{results['total_questions']}
+⭐ Набрано очков: {results['score']}
+📈 Процент правильных: {results['percentage']:.1f}%
+
+🎖️ <b>Оценка:</b> {results['grade']} {results['grade_emoji']}
+
+<code>{'═' * 35}</code>
+<code>Отличная работа! Продолжайте изучать классику! 📚</code>
+"""
+            await callback.message.answer(results_text, parse_mode=ParseMode.HTML)
+    
+    await callback.answer()
+
+# Обновляем обработчик /stats
+@router.message(Command("stats"))
+async def command_stats(message: Message):
+    """Показывает красивую статистику"""
+    stats_text = stats_service.format_user_stats(
+        message.from_user.id,
+        message.from_user.first_name
+    )
+    
+    await message.answer(stats_text, parse_mode=ParseMode.HTML)
+
+# Добавляем команду для цитаты дня
+@router.message(Command("quote"))
+async def command_quote(message: Message):
+    """Показывает цитату дня"""
+    quote = daily_quotes.get_random_quote()
+    
+    quote_text = f"""
+📖 <b>ЦИТАТА ДНЯ</b>
+<code>{'═' * 35}</code>
+
+<blockquote>"{quote['text']}"</blockquote>
+
+<code>{'═' * 35}</code>
+<code>✨ Вдохновляйтесь и читайте больше!</code>
+"""
+    
+    await message.answer(quote_text, parse_mode=ParseMode.HTML)
+    
 # Остальные обработчики (change_author, reset_chat, help, stats и т.д.)
 # ... (можно добавить из предыдущего кода)
 
