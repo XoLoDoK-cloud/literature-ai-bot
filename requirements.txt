@@ -1,4 +1,6 @@
+# ========== requirements.txt ==========
 aiogram==3.10.0
 gigachat==0.2.0
 python-dotenv==1.0.0
-aiofiles==23.2.1
+aiofiles==23.2.0
+pydantic==2.5.0
