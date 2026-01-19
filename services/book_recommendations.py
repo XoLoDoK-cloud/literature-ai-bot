@@ -124,4 +124,83 @@ class BookRecommendations:
             
             # Очки за автора
             author_lower = book["author"].lower()
-            if
+            if any(author in author_lower for author in ["пушкин"]):
+                if "pushkin" in mentioned_authors:
+                    score += 3
+            if any(author in author_lower for author in ["достоевск"]):
+                if "dostoevsky" in mentioned_authors:
+                    score += 3
+            if any(author in author_lower for author in ["толст"]):
+                if "tolstoy" in mentioned_authors:
+                    score += 3
+            
+            # Очки за жанр
+            if mentioned_genres:
+                for genre in mentioned_genres:
+                    if genre in book["genre"].lower():
+                        score += 2
+            
+            # Очки за сложность (предпочитаем среднюю)
+            if book["difficulty"] == "Средняя":
+                score += 1
+            
+            if score > 0:
+                filtered_books.append((score, book))
+        
+        # Сортируем по релевантности
+        filtered_books.sort(key=lambda x: x[0], reverse=True)
+        
+        # Если нет подходящих, возвращаем случайные
+        if not filtered_books:
+            return random.sample(self.books, min(3, len(self.books)))
+        
+        # Возвращаем топ рекомендации
+        return [book for _, book in filtered_books[:5]]
+    
+    def get_book_details(self, book_id: str) -> Dict:
+        """Получает детальную информацию о книге"""
+        for book in self.books:
+            if book["id"] == book_id:
+                return book
+        return None
+    
+    def update_preferences(self, user_id: int, message: str, author_key: str):
+        """Обновляет предпочтения пользователя"""
+        if user_id not in self.user_preferences:
+            self.user_preferences[user_id] = {
+                "authors": [],
+                "genres": [],
+                "last_updated": datetime.now().isoformat()
+            }
+        
+        # Добавляем автора если его еще нет
+        if author_key and author_key not in self.user_preferences[user_id]["authors"]:
+            self.user_preferences[user_id]["authors"].append(author_key)
+        
+        # Анализируем сообщение на предмет жанров
+        message_lower = message.lower()
+        genres = self.user_preferences[user_id]["genres"]
+        
+        if any(word in message_lower for word in ["стих", "поэм", "рифм"]):
+            if "поэзия" not in genres:
+                genres.append("поэзия")
+        if any(word in message_lower for word in ["роман", "проз", "истор"]):
+            if "проза" not in genres:
+                genres.append("проза")
+        if any(word in message_lower for word in ["драм", "пьес", "театр"]):
+            if "драма" not in genres:
+                genres.append("драма")
+        if any(word in message_lower for word in ["философ", "психолог"]):
+            if "философия" not in genres:
+                genres.append("философия")
+    
+    def get_user_preferences(self, user_id: int) -> Dict:
+        """Возвращает предпочтения пользователя"""
+        return self.user_preferences.get(user_id, {
+            "authors": [],
+            "genres": [],
+            "last_updated": datetime.now().isoformat()
+        })
+
+# Глобальный экземпляр
+book_recommendations = BookRecommendations()
