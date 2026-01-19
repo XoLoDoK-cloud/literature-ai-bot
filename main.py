@@ -1,6 +1,11 @@
 import asyncio
 import logging
 import sys
+from keyboards.inline_keyboards import get_authors_keyboard, get_author_gallery_keyboard
+from keyboards.quiz_keyboards import get_quiz_start_keyboard, get_quiz_question_keyboard
+from services.daily_quotes import daily_quotes
+from services.statistics import stats_service
+from services.quiz_service import quiz_service
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message, CallbackQuery
