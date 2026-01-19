@@ -4,16 +4,13 @@ import sys
 import json
 import os
 from datetime import datetime
-
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-
 from gigachat import GigaChat
-
 # ========== КОНФИГУРАЦИЯ ==========
 logging.basicConfig(
     level=logging.INFO,
@@ -21,9 +18,7 @@ logging.basicConfig(
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
-
 from config import BOT_TOKEN, GIGACHAT_CREDENTIALS
-
 # ========== БАЗА ДАННЫХ ==========
 class SimpleDatabase:
     def __init__(self):
@@ -64,13 +59,10 @@ class SimpleDatabase:
             "role": "assistant",
             "content": bot_response
         })
-        # Ограничиваем историю 10 сообщениями
         if len(data["conversation_history"]) > 10:
             data["conversation_history"] = data["conversation_history"][-10:]
         self.save_user_data(user_id, data)
-
 db = SimpleDatabase()
-
 # ========== GIGACHAT КЛИЕНТ ==========
 class GigaChatClient:
     def __init__(self):
@@ -80,7 +72,6 @@ class GigaChatClient:
             self.available = False
             return
         try:
-            # Отключаем SSL так как в Replit могут быть проблемы с сертификатами
             self.client = GigaChat(credentials=self.credentials, verify_ssl_certs=False)
             self.available = True
             logger.info("GigaChat client initialized")
@@ -102,11 +93,8 @@ class GigaChatClient:
             
         try:
             system_prompt = self._get_author_prompt(author_key)
-            # Формируем запрос
             prompt_full = f"{system_prompt}\n\nСобеседник: {user_message}\nПисатель:"
             
-            # GigaChat API call (sync wrapped in async if needed, but gigachat lib is often sync)
-            # Using run_in_executor to avoid blocking the event loop
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None, 
@@ -116,9 +104,7 @@ class GigaChatClient:
         except Exception as e:
             logger.error(f"GigaChat gen error: {e}")
             return "Мои мысли сейчас заняты другим произведением. Давайте поговорим позже."
-
 gigachat_client = GigaChatClient()
-
 # ========== КЛАВИАТУРЫ ==========
 def get_authors_keyboard():
     builder = InlineKeyboardBuilder()
@@ -131,7 +117,6 @@ def get_authors_keyboard():
         builder.add(InlineKeyboardButton(text=text, callback_data=f"author_{data}"))
     builder.adjust(2)
     return builder.as_markup()
-
 def get_chat_keyboard():
     builder = InlineKeyboardBuilder()
     buttons = [
@@ -143,10 +128,8 @@ def get_chat_keyboard():
         builder.add(InlineKeyboardButton(text=text, callback_data=data))
     builder.adjust(2)
     return builder.as_markup()
-
 # ========== ОБРАБОТЧИКИ ==========
 router = Router()
-
 @router.message(CommandStart())
 async def start_cmd(message: Message):
     await message.answer(
@@ -154,7 +137,6 @@ async def start_cmd(message: Message):
         reply_markup=get_authors_keyboard(),
         parse_mode=ParseMode.HTML
     )
-
 @router.callback_query(F.data.startswith("author_"))
 async def select_author(callback: CallbackQuery):
     author_key = callback.data.split("_")[1]
@@ -182,7 +164,6 @@ async def select_author(callback: CallbackQuery):
         parse_mode=ParseMode.HTML
     )
     await callback.answer()
-
 @router.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -210,7 +191,6 @@ async def handle_message(message: Message):
     
     await asyncio.sleep(0.5)
     await message.answer("💬 Продолжим?", reply_markup=get_chat_keyboard())
-
 @router.callback_query(F.data == "change_author")
 async def change_author(callback: CallbackQuery):
     await callback.message.edit_text(
@@ -219,7 +199,6 @@ async def change_author(callback: CallbackQuery):
         parse_mode=ParseMode.HTML
     )
     await callback.answer()
-
 @router.callback_query(F.data == "reset_chat")
 async def reset_chat(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -228,7 +207,6 @@ async def reset_chat(callback: CallbackQuery):
     db.save_user_data(user_id, data)
     await callback.message.answer("🔄 История очищена. Начнем с чистого листа!")
     await callback.answer()
-
 @router.callback_query(F.data == "help")
 async def help_cmd(callback: CallbackQuery):
     await callback.message.answer(
@@ -236,16 +214,13 @@ async def help_cmd(callback: CallbackQuery):
         parse_mode=ParseMode.HTML
     )
     await callback.answer()
-
 async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(router)
     
     logger.info("🚀 Бот запущен (GigaChat)")
-    # Удаляем вебхук перед запуском polling для избежания конфликтов
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
 if __name__ == "__main__":
     asyncio.run(main())
