@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+import random
 from datetime import datetime
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
@@ -8,6 +9,7 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.formatting import as_list, as_section, Bold, Italic, Text, as_key_value, Code
 
 # Импорт конфигурации
 from config import BOT_TOKEN, GIGACHAT_CREDENTIALS
@@ -30,7 +32,9 @@ from keyboards.inline_keyboards import (
     get_timeline_keyboard,
     get_what_if_keyboard,
     get_writing_keyboard,
-    get_book_recommendations_keyboard
+    get_book_recommendations_keyboard,
+    get_voice_keyboard,
+    get_illustrations_keyboard
 )
 
 # Настройка логирования
@@ -44,9 +48,49 @@ logger = logging.getLogger(__name__)
 # Инициализация клиентов
 gigachat_client = GigaChatClient(GIGACHAT_CREDENTIALS)
 
-# Хранилище пользователей (временное)
+# Хранилище пользователей
 user_storage = {}
-writing_sessions = {}  # Для режима совместного письма
+writing_sessions = {}
+
+# ASCII-арты для оформления
+ASCII_ART = {
+    "welcome": """
+╔═══════════════════════════════════════╗
+║        🎭 ЛИТЕРАТУРНЫЙ САЛОН 🎭       ║
+║           ВЕРСИЯ 4.0 ✨              ║
+╚═══════════════════════════════════════╝
+    """,
+    "authors": """
+╔═══════════════════════════════════════╗
+║          📚 ВЕЛИКИЕ УМЫ 📚           ║
+║       Выберите собеседника           ║
+╚═══════════════════════════════════════╝
+    """,
+    "gigachad": """
+╔═══════════════════════════════════════╗
+║           💪 ГИГАЧАД MODE 💪         ║
+║        МОТИВАЦИЯ + КЛАССИКА          ║
+╚═══════════════════════════════════════╝
+    """,
+    "what_if": """
+╔═══════════════════════════════════════╗
+║          🎭 ЧТО ЕСЛИ... 🎭           ║
+║      АЛЬТЕРНАТИВНЫЕ РЕАЛЬНОСТИ       ║
+╚═══════════════════════════════════════╝
+    """,
+    "writing": """
+╔═══════════════════════════════════════╗
+║          ✍️ СОВМЕСТНОЕ ТВОРЧЕСТВО    ║
+║        Пишем с классиками!           ║
+╚═══════════════════════════════════════╝
+    """,
+    "timeline": """
+╔═══════════════════════════════════════╗
+║          📅 ТАЙМЛАЙН ЖИЗНИ 📅        ║
+║      Ключевые события писателей      ║
+╚═══════════════════════════════════════╝
+    """
+}
 
 def get_user_data(user_id: int) -> dict:
     """Получает данные пользователя"""
@@ -56,57 +100,98 @@ def get_user_data(user_id: int) -> dict:
             "conversation_history": [],
             "message_count": 0,
             "gigachad_mode": False,
+            "what_if_mode": False,
             "achievements": [],
             "last_active": datetime.now().isoformat(),
             "book_preferences": [],
-            "what_if_mode": False
+            "level": 1,
+            "xp": 0,
+            "created_at": datetime.now().isoformat(),
+            "streak_days": 0
         }
     return user_storage[user_id]
+
+def format_header(title: str, emoji: str = "") -> str:
+    """Форматирует заголовок с рамкой"""
+    border = "═" * 40
+    return f"\n{border}\n{emoji} {title}\n{border}\n"
+
+def format_quote(text: str, author: str = "") -> str:
+    """Форматирует цитату красиво"""
+    quote_lines = text.split('\n')
+    formatted = ""
+    for line in quote_lines:
+        formatted += f"   {line}\n"
+    
+    if author:
+        formatted += f"\n{'─' * 30}\n   👤 {author}"
+    
+    return formatted
+
+def get_xp_bar(xp: int, level: int) -> str:
+    """Создает прогресс-бар XP"""
+    xp_needed = level * 100
+    progress = min(xp / xp_needed * 100, 100)
+    filled = int(progress / 10)
+    bar = "█" * filled + "░" * (10 - filled)
+    return f"[{bar}] {progress:.1f}%"
 
 # Создаем роутер
 router = Router()
 
-# ========== КОМАНДЫ БОТА ==========
+# ========== КРАСИВЫЕ КОМАНДЫ ==========
 
 @router.message(CommandStart())
 async def command_start(message: Message):
-    """Команда /start - главное меню"""
+    """Красивая команда /start"""
     user_id = message.from_user.id
-    
-    # Получаем или создаем данные пользователя
     user_data = get_user_data(user_id)
-    user_data["username"] = message.from_user.username
-    user_data["first_name"] = message.from_user.first_name
-    user_data["last_active"] = datetime.now().isoformat()
     
-    # Проверяем новые достижения
+    # Обновляем данные пользователя
+    user_data.update({
+        "username": message.from_user.username,
+        "first_name": message.from_user.first_name,
+        "last_active": datetime.now().isoformat()
+    })
+    
+    # Проверяем достижения
     new_achievements = achievements_service.check_new_achievements(user_id, user_data)
     
-    welcome_text = f"""
-{'═' * 40}
-🎭 <b>ЛИТЕРАТУРНЫЙ САЛОН v3.0</b> 🚀
-{'═' * 40}
-
-👋 <b>Добро пожаловать, {message.from_user.first_name}!</b>
-
-✨ <b>Новые возможности:</b>
-• 🎤 <b>Голосовые ответы</b> (новинка!)
-• 🎭 <b>Режим "Что если..."</b>
-• ✍️ <b>Совместное письмо</b> с авторами
-• 🖼️ <b>Иллюстрации книг</b>
-• 📅 <b>Таймлайн жизни</b> писателей
-• 📚 <b>Рекомендации книг</b>
-
-🎯 <b>Сегодняшняя миссия:</b>
-Побеседовать с 2 разными авторами
-"""
+    # Случайное приветствие
+    greetings = [
+        f"✨ Добро пожаловать в мир классики, {message.from_user.first_name}!",
+        f"🎭 Рады видеть вас, {message.from_user.first_name}! Готовы к беседе с великими?",
+        f"📚 Приветствуем, {message.from_user.first_name}! Откройте для себя магию литературы!"
+    ]
     
+    welcome_text = ASCII_ART["welcome"]
+    welcome_text += f"\n{random.choice(greetings)}\n"
+    welcome_text += format_header("🌟 НОВЫЕ ВОЗМОЖНОСТИ", "✨")
+    welcome_text += """
+🎤  Голосовые цитаты от авторов
+🎭  Режим "Что если..." (альтернативные реальности)
+✍️  Совместное письмо с классиками
+🖼️  Галерея иллюстраций и обложек
+📅  Интерактивные таймлайны жизни
+📚  Умные рекомендации книг
+💎  Система достижений и уровней
+    """
+    
+    welcome_text += format_header("🎯 СЕГОДНЯШНИЕ ЗАДАНИЯ", "📋")
+    welcome_text += """
+•  Побеседовать с 2 разными авторами
+•  Получить цитату дня
+•  Попробовать режим "Что если..."
+    """
+    
+    # Показываем новые достижения
     if new_achievements:
-        welcome_text += f"\n🏆 <b>Новое достижение!</b>\n"
+        welcome_text += format_header("🏆 НОВЫЕ ДОСТИЖЕНИЯ", "🎉")
         for ach in new_achievements:
-            welcome_text += f"• {ach['name']} - {ach['description']}\n"
+            welcome_text += f"\n{ach['emoji']} {ach['name']}\n"
+            welcome_text += f"   {ach['description']}\n"
     
-    welcome_text += f"\n{'═' * 40}\n👇 <b>Выберите действие:</b>"
+    welcome_text += format_header("👇 ВЫБЕРИТЕ ДЕЙСТВИЕ", "🎮")
     
     await message.answer(
         welcome_text,
@@ -114,196 +199,181 @@ async def command_start(message: Message):
         parse_mode=ParseMode.HTML
     )
     
-    logger.info(f"👤 Новый пользователь: {user_id} (@{message.from_user.username})")
+    logger.info(f"👤 Пользователь: {user_id} (@{message.from_user.username})")
 
 @router.message(Command("gigachad"))
 async def command_gigachad(message: Message):
-    """Быстрая команда Гигачада"""
+    """Красивая команда Гигачада"""
     user_id = message.from_user.id
     user_data = get_user_data(user_id)
     
-    user_data["selected_author"] = "gigachad"
-    user_data["gigachad_mode"] = True
-    user_data["conversation_history"] = []
+    user_data.update({
+        "selected_author": "gigachad",
+        "gigachad_mode": True,
+        "conversation_history": []
+    })
+    
+    response_text = ASCII_ART["gigachad"]
+    response_text += format_header("РЕЖИМ АКТИВИРОВАН", "💪")
+    response_text += f"\n🎯 <b>{message.from_user.first_name.upper()}</b>, готов к прокачке!\n"
+    response_text += format_header("🚀 ЧТО МОЖНО СПРОСИТЬ", "🔥")
+    response_text += """
+•  Как книги делают тебя сильнее?
+•  В чём сила классики для мужчины?
+•  Что Пушкин думал бы о качалке?
+•  Как дисциплинировать себя книгами?
+•  Литература + спорт = ?
+    """
+    response_text += format_header("💡 СОВЕТ ГИГАЧАДА", "⭐")
+    response_text += "\nЗадавай вопрос — получай мотивацию!\nЧитай утром, думай днём, побеждай вечером! 🏆\n"
     
     await message.answer(
-        "💪 <b>РЕЖИМ ГИГАЧАД АКТИВИРОВАН!</b>\n\n"
-        "<i>Мотивация + литература = ЛЕГЕНДА</i>\n\n"
-        "🔥 <b>Примеры вопросов:</b>\n"
-        "• Как прокачать мозг книгами?\n"
-        "• В чём сила классики для мужчины?\n"
-        "• Что Пушкин думал бы о качалке?\n\n"
-        "<code>🚀 Задавай вопрос — получай мотивацию!</code>",
+        response_text,
         reply_markup=get_chat_keyboard(user_id),
         parse_mode=ParseMode.HTML
     )
 
-@router.message(Command("whatif"))
-async def command_whatif(message: Message):
-    """Режим 'Что если...'"""
-    user_id = message.from_user.id
-    user_data = get_user_data(user_id)
-    user_data["what_if_mode"] = True
-    
-    await message.answer(
-        "🎭 <b>РЕЖИМ 'ЧТО ЕСЛИ...'</b>\n\n"
-        "<i>Исследуйте альтернативные реальности с писателями!</i>\n\n"
-        "🔮 <b>Примеры вопросов:</b>\n"
-        "• Что если Пушкин жил в 21 веке?\n"
-        "• Что если Достоевский писал детективы?\n"
-        "• Что если Толстой был IT-предпринимателем?\n\n"
-        "<code>Выберите автора и задавайте 'что если' вопросы!</code>",
-        reply_markup=get_what_if_keyboard(),
-        parse_mode=ParseMode.HTML
-    )
-
-@router.message(Command("write"))
-async def command_write(message: Message):
-    """Совместное письмо с автором"""
-    user_id = message.from_user.id
-    
-    await message.answer(
-        "✍️ <b>СОВМЕСТНОЕ ПИСЬМО</b>\n\n"
-        "<i>Напишите произведение вместе с великим писателем!</i>\n\n"
-        "📝 <b>Как это работает:</b>\n"
-        "1. Выберите автора\n"
-        "2. Выберите жанр\n"
-        "3. Начните писать предложение\n"
-        "4. Автор продолжит за вас\n\n"
-        "<code>Создайте шедевр вместе с классиком! 🎨</code>",
-        reply_markup=get_writing_keyboard(),
-        parse_mode=ParseMode.HTML
-    )
-
-@router.message(Command("timeline"))
-async def command_timeline(message: Message):
-    """Таймлайн жизни писателей"""
-    await message.answer(
-        "📅 <b>ТАЙМЛАЙН ЖИЗНИ ПИСАТЕЛЕЙ</b>\n\n"
-        "<i>Исследуйте ключевые события жизни классиков</i>",
-        reply_markup=get_timeline_keyboard(),
-        parse_mode=ParseMode.HTML
-    )
-
-@router.message(Command("books"))
-async def command_books(message: Message):
-    """Рекомендации книг"""
+@router.message(Command("profile"))
+async def command_profile(message: Message):
+    """Красивый профиль пользователя"""
     user_id = message.from_user.id
     user_data = get_user_data(user_id)
     
-    recommendations = book_recommendations.get_recommendations(
-        user_data.get("conversation_history", []),
-        user_data.get("book_preferences", [])
-    )
+    # Рассчитываем уровень
+    xp = user_data.get("xp", 0)
+    level = user_data.get("level", 1)
+    xp_needed = level * 100
+    xp_bar = get_xp_bar(xp, level)
     
-    books_text = "📚 <b>ПЕРСОНАЛЬНЫЕ РЕКОМЕНДАЦИИ</b>\n\n"
+    # Статистика по авторам
+    author_stats = {}
+    for msg in user_data.get("conversation_history", []):
+        if msg["role"] == "assistant":
+            # Упрощённый анализ автора
+            text = msg["content"].lower()
+            if any(name in text for name in ["пушкин", "александр"]):
+                author_stats["pushkin"] = author_stats.get("pushkin", 0) + 1
     
-    for i, rec in enumerate(recommendations[:5], 1):
-        books_text += f"{i}. <b>{rec['title']}</b> - {rec['author']}\n"
-        books_text += f"   <i>{rec['reason']}</i>\n\n"
+    profile_text = format_header("👤 ВАШ ПРОФИЛЬ", "📊")
     
-    books_text += "<code>Выберите книгу для получения подробностей:</code>"
+    # Основная информация
+    profile_text += f"""
+<b>🎭 Имя:</b> {user_data.get('first_name', 'Читатель')}
+<b>⭐ Уровень:</b> {level}
+<b>🎯 Опыт:</b> {xp}/{xp_needed}
+{bold("📈 Прогресс:")} {xp_bar}
+"""
     
-    await message.answer(
-        books_text,
-        reply_markup=get_book_recommendations_keyboard(recommendations[:5]),
-        parse_mode=ParseMode.HTML
-    )
-
-@router.message(Command("voice"))
-async def command_voice(message: Message):
-    """Голосовые ответы от авторов"""
-    user_id = message.from_user.id
-    user_data = get_user_data(user_id)
+    profile_text += format_header("📊 СТАТИСТИКА", "💬")
+    profile_text += f"""
+<b>💬 Сообщений:</b> {user_data.get('message_count', 0)}
+<b>📅 На сайте с:</b> {datetime.fromisoformat(user_data['created_at']).strftime('%d.%m.%Y')}
+<b>🔥 Дней подряд:</b> {user_data.get('streak_days', 0)}
+"""
     
-    if not user_data.get("selected_author"):
-        await message.answer(
-            "⚠️ <b>Сначала выберите автора!</b>\n\n"
-            "Используйте /start для выбора автора.",
-            reply_markup=get_main_menu_keyboard()
-        )
-        return
+    # Активность по авторам
+    if author_stats:
+        profile_text += format_header("🎭 ЛЮБИМЫЕ АВТОРЫ", "❤️")
+        for author, count in sorted(author_stats.items(), key=lambda x: x[1], reverse=True)[:3]:
+            author_names = {
+                "pushkin": "🖋️ Пушкин",
+                "dostoevsky": "📚 Достоевский",
+                "tolstoy": "✍️ Толстой",
+                "gigachad": "💪 ГИГАЧАД"
+            }
+            name = author_names.get(author, author)
+            percentage = (count / user_data.get('message_count', 1)) * 100
+            bar = "█" * int(percentage / 10) + "░" * (10 - int(percentage / 10))
+            profile_text += f"\n{name}: {bar} {percentage:.0f}%"
     
-    author_key = user_data["selected_author"]
-    author_names = {
-        "pushkin": "Александр Пушкин",
-        "dostoevsky": "Фёдор Достоевский",
-        "tolstoy": "Лев Толстой",
-        "gigachad": "💪 ГИГАЧАД"
-    }
-    author_name = author_names.get(author_key, "Писатель")
+    profile_text += format_header("🏆 БЛИЖАЙШИЕ ЦЕЛИ", "🎯")
+    profile_text += f"""
+🎯 Уровень {level + 1} ({xp_needed - xp} XP до цели)
+💬 {100 - user_data.get('message_count', 0)} сообщений до 100
+📚 Побеседовать с 5 авторами
+"""
     
-    # Получаем цитату для озвучки
-    quote = daily_quotes.get_random_quote(author_key)
-    
-    # Показываем текст цитаты
-    await message.answer(
-        f"🎤 <b>ГОЛОСОВАЯ ЦИТАТА ОТ {author_name.upper()}</b>\n\n"
-        f"<blockquote>«{quote['text']}»</blockquote>\n\n"
-        f"<i>— {quote.get('work', 'Произведение')}</i>\n\n"
-        f"<code>🔊 Аудио генерируется... (в разработке)</code>",
-        parse_mode=ParseMode.HTML
-    )
-    
-    # Здесь будет код генерации голосового сообщения
-    # Пока отправляем текстовое объяснение
-    await message.answer(
-        "🎯 <b>ГОЛОСОВЫЕ ОТВЕТЫ (в разработке)</b>\n\n"
-        "<i>Скоро авторы заговорят с вами!</i>\n\n"
-        "🛠️ <b>Технологии:</b>\n"
-        "• Yandex SpeechKit для синтеза речи\n"
-        "• Индивидуальные голоса для каждого автора\n"
-        "• Эмоциональное окрашивание речи\n\n"
-        "<code>Следите за обновлениями! 🚀</code>"
-    )
-
-@router.message(Command("stats"))
-async def command_stats(message: Message):
-    """Статистика пользователя"""
-    user_id = message.from_user.id
-    user_data = get_user_data(user_id)
-    
-    stats_text = stats_service.format_user_stats(user_data, message.from_user.first_name)
-    
-    await message.answer(stats_text, parse_mode=ParseMode.HTML)
+    await message.answer(profile_text, parse_mode=ParseMode.HTML)
 
 @router.message(Command("quote"))
 async def command_quote(message: Message):
-    """Случайная цитата"""
+    """Красивая цитата дня"""
     quote = daily_quotes.get_random_quote()
     
-    quote_text = f"""
-📖 <b>ЦИТАТА ДНЯ</b>
-{'═' * 35}
-
-<blockquote>«{quote['text']}»</blockquote>
-
-<i>— {quote.get('work', 'Произведение')}</i>
-
-{'═' * 35}
-<code>✨ Вдохновляйтесь и читайте больше!</code>
-"""
+    # Случайный стиль оформления
+    styles = [
+        ("📖 ЦИТАТА ДНЯ", "✨"),
+        ("💫 ЖЕМЧУЖИНА МУДРОСТИ", "🌟"),
+        ("🎭 СЛОВА ВЕЛИКИХ", "📚")
+    ]
+    title, emoji = random.choice(styles)
+    
+    quote_text = format_header(title, emoji)
+    quote_text += format_quote(quote['text'], quote.get('work', 'Произведение'))
+    quote_text += format_header("✨ ВДОХНОВЛЯЙТЕСЬ", "💎")
+    quote_text += "\nКаждая прочитанная книга делает вас лучше!\n"
     
     await message.answer(quote_text, parse_mode=ParseMode.HTML)
 
-@router.message(Command("achievements"))
-async def command_achievements(message: Message):
-    """Достижения пользователя"""
+@router.message(Command("daily"))
+async def command_daily(message: Message):
+    """Ежедневные задания"""
     user_id = message.from_user.id
     user_data = get_user_data(user_id)
     
-    achievements_text = achievements_service.format_achievements(user_data)
+    daily_text = format_header("📅 ЕЖЕДНЕВНЫЕ ЗАДАНИЯ", "🎯")
     
-    await message.answer(achievements_text, parse_mode=ParseMode.HTML)
+    # Генерируем случайные задания
+    tasks = [
+        "Побеседовать с Пушкиным о любви",
+        "Спросить Достоевского о смысле жизни",
+        "Активировать режим Гигачад",
+        "Получить цитату дня",
+        "Попробовать режим 'Что если...'",
+        "Начать совместное письмо"
+    ]
+    
+    daily_tasks = random.sample(tasks, 3)
+    
+    for i, task in enumerate(daily_tasks, 1):
+        daily_text += f"\n{i}. ✅ {task}"
+    
+    # Награды
+    daily_text += format_header("🏆 НАГРАДЫ ЗА ВЫПОЛНЕНИЕ", "💎")
+    daily_text += """
+•  +50 XP за каждое задание
+•  +150 XP за все задания
+•  Специальное достижение
+•  Увеличение уровня
+"""
+    
+    # Прогресс
+    daily_text += format_header("📊 ВАШ ПРОГРЕСС", "⭐")
+    daily_text += f"""
+🎯 Выполнено: 0/3 заданий
+⭐ Получено XP: 0
+🔥 Серия выполнения: 0 дней
+"""
+    
+    daily_text += format_header("💡 СОВЕТ", "✨")
+    daily_text += "\nВыполняйте задания ежедневно для быстрого роста!\n"
+    
+    await message.answer(daily_text, parse_mode=ParseMode.HTML)
 
-# ========== ОБРАБОТЧИКИ INLINE-КНОПОК ==========
+# ========== КРАСИВЫЕ CALLBACK ОБРАБОТЧИКИ ==========
 
 @router.callback_query(F.data == "main_menu")
 async def callback_main_menu(callback: CallbackQuery):
-    """Главное меню"""
+    """Главное меню с красивым оформлением"""
+    menu_text = format_header("🎭 ГЛАВНОЕ МЕНЮ", "✨")
+    menu_text += """
+🏠  Добро пожаловать в центр управления!
+
+Выберите раздел для продолжения:
+"""
+    
     await callback.message.edit_text(
-        "🎭 <b>ГЛАВНОЕ МЕНЮ</b>\n\n"
-        "<i>Выберите действие:</i>",
+        menu_text,
         reply_markup=get_main_menu_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -311,10 +381,24 @@ async def callback_main_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data == "select_author")
 async def callback_select_author(callback: CallbackQuery):
-    """Выбор автора"""
+    """Красивый выбор автора"""
+    authors_text = ASCII_ART["authors"]
+    authors_text += format_header("ВЫБЕРИТЕ СОБЕСЕДНИКА", "👥")
+    authors_text += """
+Каждый автор обладает уникальным стилем:
+
+🖋️  <b>Пушкин</b> — романтичный и остроумный
+📚  <b>Достоевский</b> — глубокий философ
+✍️  <b>Толстой</b> — мудрый наставник
+👻  <b>Гоголь</b> — ироничный мистик
+🏥  <b>Чехов</b> — лаконичный наблюдатель
+💪  <b>ГИГАЧАД</b> — мотивационный эксперт
+"""
+    authors_text += format_header("💡 СОВЕТ", "🌟")
+    authors_text += "\nНачните с того автора, чьи произведения вам ближе!\n"
+    
     await callback.message.edit_text(
-        "📚 <b>ВЫБЕРИТЕ АВТОРА</b>\n\n"
-        "<i>С кем хотите побеседовать?</i>",
+        authors_text,
         reply_markup=get_authors_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -322,165 +406,79 @@ async def callback_select_author(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("author_"))
 async def callback_author_selected(callback: CallbackQuery):
-    """Автор выбран"""
+    """Красивый выбор автора"""
     author_key = callback.data.split("_")[1]
     
-    author_names = {
-        "pushkin": ("🖋️ Александр Пушкин", "Приветствую! О чём желаете побеседовать?"),
-        "dostoevsky": ("📚 Фёдор Достоевский", "Здравствуйте. Что тревожит вашу душу?"),
-        "tolstoy": ("✍️ Лев Толстой", "Здравствуйте. Говорите правду — я слушаю."),
-        "gogol": ("👻 Николай Гоголь", "А, вот и вы! Что привело вас в мой мир?"),
-        "chekhov": ("🏥 Антон Чехов", "Здравствуйте. Рассказывайте."),
-        "gigachad": ("💪 ГИГАЧАД", f"СЛУШАЙ СЮДА, {callback.from_user.first_name.upper()}! Готов к вопросам! 💪")
+    author_info = {
+        "pushkin": {
+            "name": "🖋️ Александр Пушкин",
+            "greeting": "Приветствую вас, друг мой! О чём желаете побеседовать?",
+            "fact": "Автор более 800 стихотворений и создатель современного русского языка",
+            "emoji": "✨"
+        },
+        "dostoevsky": {
+            "name": "📚 Фёдор Достоевский",
+            "greeting": "Здравствуйте. Что тревожит вашу душу сегодня?",
+            "fact": "Пережил инсценировку казни и 4 года каторги",
+            "emoji": "🌀"
+        },
+        "tolstoy": {
+            "name": "✍️ Лев Толстой",
+            "greeting": "Здравствуйте. Говорите правду — я слушаю.",
+            "fact": "В 82 года ушёл из дома, чтобы жить в простоте",
+            "emoji": "🌳"
+        },
+        "gigachad": {
+            "name": "💪 ГИГАЧАД",
+            "greeting": f"СЛУШАЙ СЮДА, {callback.from_user.first_name.upper()}! ГОТОВ К ВОПРОСАМ! 💪",
+            "fact": "Считает, что каждая прочитанная книга — +10 к силе характера",
+            "emoji": "🏋️"
+        }
     }
     
-    author_name, greeting = author_names.get(author_key, ("Писатель", "Рад беседе!"))
+    info = author_info.get(author_key, author_info["pushkin"])
     
     user_id = callback.from_user.id
     user_data = get_user_data(user_id)
-    user_data["selected_author"] = author_key
-    user_data["conversation_history"] = []
+    user_data.update({
+        "selected_author": author_key,
+        "conversation_history": []
+    })
     
-    # Получаем цитату дня для этого автора
+    # Получаем цитату дня
     quote = daily_quotes.get_daily_quote(author_key)
     
-    response_text = f"""
-{'═' * 35}
-✅ <b>ВЫБРАН: {author_name}</b>
-{'═' * 35}
-
-{greeting}
-
-📖 <b>ЦИТАТА ДНЯ ОТ АВТОРА:</b>
-<blockquote>«{quote['text']}»</blockquote>
-<i>— {quote.get('work', 'Произведение')}</i>
-
-{'═' * 35}
-👇 <b>Задавайте вопросы:</b>
+    # Форматируем ответ
+    response_text = format_header(info["name"], info["emoji"])
+    response_text += f"\n{info['greeting']}\n"
+    
+    response_text += format_header("💎 ИНТЕРЕСНЫЙ ФАКТ", "✨")
+    response_text += f"\n{info['fact']}\n"
+    
+    response_text += format_header("📖 ЦИТАТА ДНЯ ОТ АВТОРА", "⭐")
+    response_text += format_quote(quote['text'], quote.get('work', 'Произведение'))
+    
+    response_text += format_header("🎯 ЧТО МОЖНО СПРОСИТЬ", "💡")
+    response_text += """
+•  О жизни и творчестве
+•  О философских взглядах
+•  О любимых произведениях
+•  О современности
+•  О чём угодно!
 """
+    
+    response_text += format_header("👇 НАЧИНАЙТЕ БЕСЕДУ", "💬")
     
     await callback.message.edit_text(
         response_text,
-        reply_markup=get_chat_keyboard(user_id, user_data.get("what_if_mode", False)),
+        reply_markup=get_chat_keyboard(user_id),
         parse_mode=ParseMode.HTML
     )
-    await callback.answer(f"Выбран: {author_name}")
-
-@router.callback_query(F.data == "toggle_whatif")
-async def callback_toggle_whatif(callback: CallbackQuery):
-    """Переключение режима 'Что если...'"""
-    user_id = callback.from_user.id
-    user_data = get_user_data(user_id)
-    
-    current_mode = user_data.get("what_if_mode", False)
-    user_data["what_if_mode"] = not current_mode
-    
-    if not current_mode:
-        await callback.message.answer(
-            "🎭 <b>РЕЖИМ 'ЧТО ЕСЛИ...' ВКЛЮЧЁН!</b>\n\n"
-            "<i>Теперь задавайте альтернативные вопросы!</i>\n\n"
-            "Примеры:\n"
-            "• Что если вы жили в наше время?\n"
-            "• Что если вы писали в другом жанре?\n"
-            "• Что если ваша жизнь сложилась иначе?\n\n"
-            "<code>Исследуйте параллельные реальности! 🌌</code>"
-        )
-    else:
-        await callback.message.answer(
-            "👌 <b>Режим 'Что если...' отключён</b>\n\n"
-            "<i>Возвращаемся к обычным вопросам</i>"
-        )
-    
-    await callback.answer()
-
-@router.callback_query(F.data == "start_writing")
-async def callback_start_writing(callback: CallbackQuery):
-    """Начало совместного письма"""
-    user_id = callback.from_user.id
-    
-    await callback.message.edit_text(
-        "✍️ <b>СОВМЕСТНОЕ ПИСЬМО</b>\n\n"
-        "<i>Выберите автора для совместного творчества:</i>",
-        reply_markup=get_authors_keyboard(writing_mode=True),
-        parse_mode=ParseMode.HTML
-    )
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("write_with_"))
-async def callback_write_with_author(callback: CallbackQuery):
-    """Письмо с конкретным автором"""
-    author_key = callback.data.split("_")[2]
-    
-    author_names = {
-        "pushkin": "Александром Пушкиным",
-        "dostoevsky": "Фёдором Достоевским", 
-        "tolstoy": "Львом Толстым",
-        "gigachad": "💪 ГИГАЧАДОМ"
-    }
-    
-    author_name = author_names.get(author_key, "писателем")
-    
-    # Сохраняем сессию письма
-    writing_sessions[callback.from_user.id] = {
-        "author": author_key,
-        "text": "",
-        "genre": "story",
-        "turn": "user"  # Чья очередь писать
-    }
-    
-    await callback.message.edit_text(
-        f"✍️ <b>ПИШЕМ С {author_name.upper()}</b>\n\n"
-        f"<i>Начните предложение, а автор продолжит за вас!</i>\n\n"
-        "📝 <b>Пример начала:</b>\n"
-        "'Однажды утром...'\n"
-        "'В далёком царстве...'\n"
-        "'Он никогда не думал, что...'\n\n"
-        "<code>Напишите первое предложение:</code>",
-        parse_mode=ParseMode.HTML
-    )
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("timeline_"))
-async def callback_timeline(callback: CallbackQuery):
-    """Показ таймлайна автора"""
-    author_key = callback.data.split("_")[1]
-    
-    timeline_text = timeline_service.get_author_timeline(author_key)
-    
-    await callback.message.answer(
-        timeline_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_timeline_keyboard(author_key)
-    )
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("book_"))
-async def callback_book_details(callback: CallbackQuery):
-    """Детали книги"""
-    book_id = callback.data.split("_")[1]
-    book_info = book_recommendations.get_book_details(book_id)
-    
-    if book_info:
-        # Здесь будет код для показа обложки книги
-        # Пока отправляем текстовое описание
-        await callback.message.answer(
-            f"📚 <b>{book_info['title'].upper()}</b>\n\n"
-            f"<b>Автор:</b> {book_info['author']}\n"
-            f"<b>Год:</b> {book_info['year']}\n"
-            f"<b>Жанр:</b> {book_info['genre']}\n\n"
-            f"<b>Описание:</b>\n{book_info['description']}\n\n"
-            f"<b>Почему рекомендуем:</b>\n{book_info['reason']}\n\n"
-            f"<code>Читайте с удовольствием! 📖</code>",
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await callback.answer("Книга не найдена", show_alert=True)
-    
-    await callback.answer()
+    await callback.answer(f"Выбран: {info['name']}")
 
 @router.callback_query(F.data == "toggle_gigachad")
 async def callback_toggle_gigachad(callback: CallbackQuery):
-    """Переключение режима Гигачад"""
+    """Красивое переключение режима"""
     user_id = callback.from_user.id
     user_data = get_user_data(user_id)
     
@@ -488,140 +486,110 @@ async def callback_toggle_gigachad(callback: CallbackQuery):
     user_data["gigachad_mode"] = not current_mode
     
     if not current_mode:
-        await callback.message.answer(
-            "💪 <b>РЕЖИМ ГИГАЧАД ВКЛЮЧЁН!</b>\n\n"
-            "<i>Теперь ответы будут мотивационными!</i>\n\n"
-            "<code>💥 Готовьтесь к прокачке!</code>"
-        )
+        response_text = format_header("💪 РЕЖИМ ГИГАЧАД АКТИВИРОВАН", "🎉")
+        response_text += """
+🎯 Теперь все ответы будут:
+
+•  Мотивационными и уверенными
+•  Краткими и по делу
+•  Связывающими литературу с жизнью
+•  С мемной, но умной харизмой
+
+🔥 Пример ответа:
+"Слушай сюда! Книги — это железо для мозга!
+Читай каждый день как делаешь подходы в зале!"
+"""
     else:
-        await callback.message.answer(
-            "👌 <b>Режим Гигачад отключён</b>"
-        )
+        response_text = format_header("👌 РЕЖИМ ГИГАЧАД ОТКЛЮЧЁН", "✅")
+        response_text += "\nВозвращаемся к обычному стилю общения.\n"
     
+    await callback.message.answer(response_text, parse_mode=ParseMode.HTML)
     await callback.answer()
 
-@router.callback_query(F.data == "show_illustrations")
-async def callback_show_illustrations(callback: CallbackQuery):
-    """Показать иллюстрации"""
-    user_id = callback.from_user.id
-    user_data = get_user_data(user_id)
-    author_key = user_data.get("selected_author")
-    
-    if not author_key:
-        await callback.answer("Сначала выберите автора", show_alert=True)
-        return
-    
-    illustrations = {
-        "pushkin": [
-            ("Обложка 'Евгения Онегина'", "https://example.com/pushkin1.jpg"),
-            ("Иллюстрация к 'Капитанской дочке'", "https://example.com/pushkin2.jpg"),
-            ("Портрет Пушкина", "https://example.com/pushkin3.jpg")
-        ],
-        "dostoevsky": [
-            ("Обложка 'Преступления и наказания'", "https://example.com/dost1.jpg"),
-            ("Иллюстрация к 'Идиоту'", "https://example.com/dost2.jpg"),
-            ("Портрет Достоевского", "https://example.com/dost3.jpg")
-        ],
-        "gigachad": [
-            ("💪 Мотивационная картинка", "https://example.com/giga1.jpg"),
-            ("🏋️ ГИГАЧАД в зале", "https://example.com/giga2.jpg"),
-            ("📚 Книги + качалка", "https://example.com/giga3.jpg")
-        ]
-    }
-    
-    author_illustrations = illustrations.get(author_key, [])
-    
-    if not author_illustrations:
-        await callback.answer("Иллюстрации не найдены", show_alert=True)
-        return
-    
-    # Отправляем первую иллюстрацию как пример
-    await callback.message.answer(
-        f"🖼️ <b>ИЛЛЮСТРАЦИИ</b>\n\n"
-        f"<i>Ссылки на изображения произведений:</i>\n\n"
-        f"1. {author_illustrations[0][0]}\n"
-        f"2. {author_illustrations[1][0]}\n"
-        f"3. {author_illustrations[2][0]}\n\n"
-        f"<code>🔗 Ссылки доступны в веб-версии</code>",
-        parse_mode=ParseMode.HTML
-    )
-    
-    await callback.answer()
-
-# ========== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ==========
+# ========== КРАСИВЫЙ ОБРАБОТЧИК СООБЩЕНИЙ ==========
 
 @router.message(F.text)
 async def handle_message(message: Message):
-    """Обработка всех текстовых сообщений"""
+    """Красивый обработчик сообщений"""
     user_id = message.from_user.id
     user_data = get_user_data(user_id)
     
-    # Проверяем, находится ли пользователь в режиме совместного письма
-    if user_id in writing_sessions:
-        await handle_writing_mode(message, user_id, user_data)
-        return
-    
-    # Обычный режим диалога
+    # Проверка автора
     author_key = user_data.get("selected_author")
-    
     if not author_key:
+        error_text = format_header("⚠️ ВНИМАНИЕ", "🎭")
+        error_text += "\nСначала выберите автора для беседы!\n"
+        error_text += format_header("🎯 КАК ЭТО СДЕЛАТЬ", "👉")
+        error_text += "\nИспользуйте кнопку ниже или команду /start\n"
+        
         await message.answer(
-            "⚠️ <b>Сначала выберите писателя!</b>\n\n"
-            "Используйте /start для выбора автора.",
-            reply_markup=get_main_menu_keyboard()
+            error_text,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode=ParseMode.HTML
         )
         return
     
+    # Имя автора
     author_names = {
-        "pushkin": "Александр Пушкин",
-        "dostoevsky": "Фёдор Достоевский", 
-        "tolstoy": "Лев Толстой",
-        "gogol": "Николай Гоголь",
-        "chekhov": "Антон Чехов",
-        "gigachad": "💪 ГИГАЧАД"
+        "pushkin": ("Александр Пушкин", "🖋️"),
+        "dostoevsky": ("Фёдор Достоевский", "📚"),
+        "tolstoy": ("Лев Толстой", "✍️"),
+        "gogol": ("Николай Гоголь", "👻"),
+        "chekhov": ("Антон Чехов", "🏥"),
+        "gigachad": ("💪 ГИГАЧАД", "💪")
+    }
+    author_name, author_emoji = author_names.get(author_key, ("Писатель", "🎭"))
+    
+    # Статус "печатает"
+    status_messages = {
+        "pushkin": f"{author_emoji} Пушкин обдумывает ответ...",
+        "dostoevsky": f"{author_emoji} Достоевский погружается в размышления...",
+        "tolstoy": f"{author_emoji} Толстой размышляет мудро...",
+        "gogol": f"{author_emoji} Гоголь создаёт образ...",
+        "chekhov": f"{author_emoji} Чехов формулирует мысль...",
+        "gigachad": f"{author_emoji} ГИГАЧАД качает ответ..."
     }
     
-    author_name = author_names.get(author_key, "Писатель")
+    status_text = status_messages.get(author_key, f"{author_emoji} Автор думает...")
     
-    # Показываем статус "печатает"
-    status_text = f"✍️ {author_name} обдумывает ответ..."
-    if user_data.get("what_if_mode"):
-        status_text = f"🎭 {author_name} исследует альтернативную реальность..."
-    elif user_data.get("gigachad_mode"):
-        status_text = f"💪 {author_name} качает ответ..."
-    
-    status_msg = await message.answer(f"<i>{status_text}</i>", parse_mode=ParseMode.HTML)
+    # Показываем анимированный статус
+    dots = ["", ".", "..", "..."]
+    for i in range(3):
+        status_msg = await message.answer(f"<i>{status_text}{dots[i]}</i>", parse_mode=ParseMode.HTML)
+        await asyncio.sleep(0.5)
+        if i < 2:
+            await status_msg.delete()
     
     try:
-        # Формируем промпт в зависимости от режима
-        if user_data.get("what_if_mode"):
-            user_message = f"Что если {message.text}"
-        else:
-            user_message = message.text
-        
-        # Генерируем ответ через GigaChat
+        # Генерируем ответ
         response = await gigachat_client.generate_response(
             author_key=author_key,
             author_name=author_name,
-            user_message=user_message,
+            user_message=message.text,
             conversation_history=user_data.get("conversation_history", []),
             gigachad_mode=user_data.get("gigachad_mode", False),
             what_if_mode=user_data.get("what_if_mode", False)
         )
         
-        # Обновляем историю
+        # Обновляем данные
         user_data["conversation_history"].append({
             "role": "user",
             "content": message.text,
             "timestamp": datetime.now().isoformat()
         })
         user_data["conversation_history"].append({
-            "role": "assistant", 
+            "role": "assistant",
             "content": response,
             "timestamp": datetime.now().isoformat()
         })
         user_data["message_count"] = user_data.get("message_count", 0) + 1
+        user_data["xp"] = user_data.get("xp", 0) + 10
         user_data["last_active"] = datetime.now().isoformat()
+        
+        # Проверяем уровень
+        if user_data["xp"] >= user_data["level"] * 100:
+            user_data["level"] += 1
+            user_data["xp"] = 0
         
         # Ограничиваем историю
         if len(user_data["conversation_history"]) > 10:
@@ -630,28 +598,39 @@ async def handle_message(message: Message):
         # Проверяем достижения
         new_achievements = achievements_service.check_new_achievements(user_id, user_data)
         
-        # Удаляем статус
+        # Удаляем последний статус
         await status_msg.delete()
         
         # Форматируем ответ
-        emoji = "🎭" if user_data.get("what_if_mode") else "💪" if user_data.get("gigachad_mode") else "🖋️"
+        response_header = format_header(f"{author_emoji} {author_name.upper()}", "💬")
         
-        response_text = f"""
-{emoji} <b>{author_name.upper()}</b>
-{'═' * 35}
-
-{response}
-
-{'═' * 35}
-"""
+        # Разбиваем ответ на абзацы для лучшего форматирования
+        response_paragraphs = response.split('\n')
+        formatted_response = ""
+        for para in response_paragraphs:
+            if para.strip():
+                formatted_response += f"   {para}\n"
         
+        response_text = response_header + "\n" + formatted_response
+        
+        # Добавляем разделитель
+        response_text += f"\n{'─' * 40}\n"
+        
+        # Показываем новые достижения
         if new_achievements:
-            response_text += "\n🏆 <b>НОВОЕ ДОСТИЖЕНИЕ!</b>\n"
+            response_text += format_header("🏆 НОВОЕ ДОСТИЖЕНИЕ", "🎉")
             for ach in new_achievements:
-                response_text += f"• {ach['name']}\n"
-            response_text += f"\n{'═' * 35}\n"
+                response_text += f"\n{ach['emoji']} <b>{ach['name']}</b>\n"
+                response_text += f"   {ach['description']}\n"
+            response_text += f"\n{'─' * 40}\n"
         
-        response_text += "\n👇 <b>Продолжить беседу?</b>"
+        # Добавляем статистику
+        response_text += f"⭐ <b>Уровень:</b> {user_data.get('level', 1)} | "
+        response_text += f"🎯 <b>XP:</b> {user_data.get('xp', 0)}/{user_data.get('level', 1)*100}\n"
+        response_text += f"💬 <b>Сообщений:</b> {user_data.get('message_count', 0)}\n"
+        
+        # Кнопка продолжения
+        response_text += format_header("👇 ПРОДОЛЖИТЬ БЕСЕДУ", "💭")
         
         # Отправляем ответ
         await message.answer(
@@ -660,10 +639,7 @@ async def handle_message(message: Message):
             parse_mode=ParseMode.HTML
         )
         
-        # Обновляем предпочтения для рекомендаций книг
-        book_recommendations.update_preferences(user_id, message.text, author_key)
-        
-        logger.info(f"💬 Сообщение: {user_id} -> {author_key} ({len(message.text)} chars)")
+        logger.info(f"💬 {user_id} -> {author_key}: {len(message.text)} chars")
         
     except Exception as e:
         # Удаляем статус в случае ошибки
@@ -672,82 +648,145 @@ async def handle_message(message: Message):
         except:
             pass
         
-        await message.answer(
-            f"❌ <b>Ошибка:</b> {str(e)[:100]}\n\n"
-            "Попробуйте перезапустить бота: /start",
-            parse_mode=ParseMode.HTML
-        )
-        logger.error(f"Ошибка обработки сообщения: {e}")
+        error_text = format_header("❌ ОШИБКА", "⚠️")
+        error_text += f"\nНе удалось получить ответ:\n<code>{str(e)[:100]}</code>\n"
+        error_text += format_header("🎯 ЧТО ДЕЛАТЬ", "👉")
+        error_text += "\n1. Попробуйте переформулировать вопрос\n"
+        error_text += "2. Используйте /start для перезагрузки\n"
+        error_text += "3. Подождите несколько минут\n"
+        
+        await message.answer(error_text, parse_mode=ParseMode.HTML)
+        logger.error(f"Ошибка: {e}")
 
-async def handle_writing_mode(message: Message, user_id: int, user_data: dict):
-    """Обработка сообщений в режиме совместного письма"""
-    session = writing_sessions[user_id]
-    author_key = session["author"]
+# ========== СПЕЦИАЛЬНЫЕ КОМАНДЫ С ОФОРМЛЕНИЕМ ==========
+
+@router.message(Command("whatif"))
+async def command_whatif(message: Message):
+    """Красивый режим 'Что если...'"""
+    whatif_text = ASCII_ART["what_if"]
+    whatif_text += format_header("ИССЛЕДУЙТЕ АЛЬТЕРНАТИВНЫЕ РЕАЛЬНОСТИ", "🌌")
+    whatif_text += """
+🎭 Что было бы, если...
+
+•  Пушкин жил в 21 веке?
+•  Достоевский писал детективы?
+•  Толстой был IT-предпринимателем?
+•  Гоголь создавал комиксы?
+•  Чехов вёл медицинский блог?
+"""
+    whatif_text += format_header("🎯 КАК РАБОТАЕТ", "⚡")
+    whatif_text += """
+1. Выберите автора
+2. Задайте вопрос "Что если..."
+3. Получите творческий ответ!
+"""
+    whatif_text += format_header("💡 ПРИМЕРЫ ВОПРОСОВ", "✨")
+    whatif_text += """
+"Что если бы вы жили в наше время?"
+"Что если бы ваши герои встретились?"
+"Что если бы вы писали в другом жанре?"
+"""
+    whatif_text += format_header("👇 НАЧНИТЕ ИССЛЕДОВАНИЕ", "🚀")
     
-    author_names = {
-        "pushkin": "Александр Пушкин",
-        "dostoevsky": "Фёдор Достоевский",
-        "tolstoy": "Лев Толстой",
-        "gigachad": "💪 ГИГАЧАД"
-    }
-    author_name = author_names.get(author_key, "Писатель")
+    await message.answer(
+        whatif_text,
+        reply_markup=get_what_if_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+
+@router.message(Command("write"))
+async def command_write(message: Message):
+    """Красивый режим совместного письма"""
+    write_text = ASCII_ART["writing"]
+    write_text += format_header("СОЗДАЙТЕ ШЕДЕВР ВМЕСТЕ С КЛАССИКОМ", "✍️")
+    write_text += """
+🎨 Вы — автор, классик — соавтор!
+
+Как это работает:
+1. Вы начинаете предложение
+2. Автор продолжает в своём стиле
+3. Вы вместе создаёте текст
+4. Сохраняете результат
+"""
+    write_text += format_header("🎭 ВЫБЕРИТЕ ЖАНР", "📖")
+    write_text += """
+📚  Роман — глубокое повествование
+🎭  Драма — эмоциональный диалог
+✨  Поэзия — рифмованные строки
+🌀  Фэнтези — магические миры
+🔍  Детектив — загадочный сюжет
+"""
+    write_text += format_header("💡 ПРИМЕРЫ НАЧАЛА", "🌟")
+    write_text += """
+•  "Однажды утром он проснулся и..."
+•  "В далёком царстве, где..."
+•  "Она никогда не думала, что..."
+•  "Тайна старого дома заключалась в..."
+"""
+    write_text += format_header("👇 НАЧНИТЕ ТВОРИТЬ", "🎨")
     
-    if session["turn"] == "user":
-        # Пользователь пишет предложение
-        session["text"] += message.text + " "
-        session["turn"] = "author"
-        
-        # Показываем статус
-        status_msg = await message.answer(f"✍️ <i>{author_name} продолжает вашу мысль...</i>", parse_mode=ParseMode.HTML)
-        
-        # Автор продолжает текст
-        continuation = await gigachat_client.continue_writing(
-            author_key=author_key,
-            author_name=author_name,
-            current_text=session["text"],
-            genre=session["genre"]
-        )
-        
-        session["text"] += continuation + " "
-        session["turn"] = "user"
-        
-        # Удаляем статус
-        await status_msg.delete()
-        
-        # Показываем результат
-        await message.answer(
-            f"✍️ <b>СОВМЕСТНОЕ ТВОРЧЕСТВО</b>\n\n"
-            f"<b>Ваша часть:</b>\n<blockquote>{message.text}</blockquote>\n\n"
-            f"<b>{author_name} продолжает:</b>\n<blockquote>{continuation}</blockquote>\n\n"
-            f"<b>Полный текст:</b>\n<blockquote>{session['text'][:500]}...</blockquote>\n\n"
-            f"<code>📝 Продолжайте писать или /stop_writing для завершения</code>",
-            parse_mode=ParseMode.HTML
-        )
-        
-    else:
-        await message.answer("⏳ Автор ещё думает над продолжением...")
+    await message.answer(
+        write_text,
+        reply_markup=get_writing_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+
+@router.message(Command("timeline"))
+async def command_timeline(message: Message):
+    """Красивый таймлайн"""
+    timeline_text = ASCII_ART["timeline"]
+    timeline_text += format_header("ПУТЕШЕСТВИЕ ПО ВРЕМЕНИ", "⏳")
+    timeline_text += """
+📅 Изучите ключевые моменты жизни великих писателей:
+
+•  Детство и юность
+•  Первые произведения
+•  Значимые события
+•  Творческие периоды
+•  Наследие
+"""
+    timeline_text += format_header("🎯 ЧТО УЗНАЕТЕ", "🔍")
+    timeline_text += """
+✨  Как формировался талант
+📚  Когда написаны великие книги
+💫  Что повлияло на творчество
+🌟  Интересные факты из жизни
+"""
+    timeline_text += format_header("👇 ВЫБЕРИТЕ АВТОРА", "👥")
+    
+    await message.answer(
+        timeline_text,
+        reply_markup=get_timeline_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
 
 # ========== ЗАПУСК БОТА ==========
 
 async def main():
-    """Основная функция запуска"""
+    """Красивый запуск бота"""
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(router)
     
-    logger.info("=" * 50)
-    logger.info("🚀 ЗАПУСК ЛИТЕРАТУРНОГО БОТА v3.0")
+    # Красивое сообщение о запуске
+    startup_text = """
+╔══════════════════════════════════════════════════╗
+║            🚀 ЛИТЕРАТУРНЫЙ БОТ v4.0 🚀          ║
+║                УСПЕШНО ЗАПУЩЕН!                 ║
+╚══════════════════════════════════════════════════╝
+    
+✨ <b>Версия:</b> 4.0 (Премиум оформление)
+🎭 <b>Авторов:</b> 6 классиков + ГИГАЧАД
+💎 <b>Особенности:</b> Анимации, прогресс-бары, ASCII-арт
+🚀 <b>Статус:</b> Готов к работе!
+"""
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("🎭 ЗАПУСК ЛИТЕРАТУРНОГО БОТА v4.0")
     logger.info(f"🤖 Бот: {BOT_TOKEN[:15]}...")
-    logger.info(f"🔑 GigaChat: {'✅' if gigachat_client.available else '❌'}")
-    logger.info("=" * 50)
-    logger.info("✨ Новые фичи:")
-    logger.info("• Голосовые ответы")
-    logger.info("• Режим 'Что если...'")
-    logger.info("• Совместное письмо")
-    logger.info("• Иллюстрации книг")
-    logger.info("• Таймлайн жизни")
-    logger.info("• Рекомендации книг")
-    logger.info("=" * 50)
+    logger.info(f"🔑 GigaChat: {'✅ Активен' if gigachat_client.available else '❌ Недоступен'}")
+    logger.info("✨ Особенности: Красивое оформление, анимации, прогресс-бары")
+    logger.info("=" * 60)
     
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
@@ -756,6 +795,8 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("⏹️ Бот остановлен пользователем")
+        logger.info("\n" + "=" * 60)
+        logger.info("⏹️  Бот остановлен пользователем")
+        logger.info("=" * 60)
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
+        logger.error(f"\n❌ Критическая ошибка: {e}")
