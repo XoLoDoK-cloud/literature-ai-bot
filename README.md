@@ -1,1 +1,0 @@
-# literature-ai-bot
