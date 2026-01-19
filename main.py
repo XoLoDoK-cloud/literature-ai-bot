@@ -1,16 +1,18 @@
 import asyncio
 import logging
 import sys
+import json
+import os
+from datetime import datetime
+
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import json
-import os
-from datetime import datetime
-import google.generativeai as genai
+
+from gigachat import GigaChat
 
 # ========== КОНФИГУРАЦИЯ ==========
 logging.basicConfig(
@@ -20,7 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from config import BOT_TOKEN, GEMINI_API_KEY
+from config import BOT_TOKEN, GIGACHAT_CREDENTIALS
 
 # ========== БАЗА ДАННЫХ ==========
 class SimpleDatabase:
@@ -37,8 +39,8 @@ class SimpleDatabase:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Error reading DB: {e}")
         return {
             "user_id": user_id,
             "selected_author": None,
@@ -56,70 +58,66 @@ class SimpleDatabase:
         data["selected_author"] = author_key
         data["conversation_history"].append({
             "role": "user",
-            "content": user_message,
-            "timestamp": datetime.now().isoformat()
+            "content": user_message
         })
         data["conversation_history"].append({
             "role": "assistant",
-            "content": bot_response,
-            "timestamp": datetime.now().isoformat()
+            "content": bot_response
         })
+        # Ограничиваем историю 10 сообщениями
         if len(data["conversation_history"]) > 10:
             data["conversation_history"] = data["conversation_history"][-10:]
         self.save_user_data(user_id, data)
 
 db = SimpleDatabase()
 
-# ========== GEMINI КЛИЕНТ ==========
-class GeminiClient:
+# ========== GIGACHAT КЛИЕНТ ==========
+class GigaChatClient:
     def __init__(self):
-        self.api_key = GEMINI_API_KEY
-        if not self.api_key or self.api_key == "ваш_ключ_gemini":
-            print("⚠️ GEMINI_API_KEY не найден, используется заглушка")
+        self.credentials = GIGACHAT_CREDENTIALS
+        if not self.credentials:
+            logger.warning("GIGACHAT_CREDENTIALS not set")
             self.available = False
             return
         try:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-pro')
+            # Отключаем SSL так как в Replit могут быть проблемы с сертификатами
+            self.client = GigaChat(credentials=self.credentials, verify_ssl_certs=False)
             self.available = True
-            print("✅ Gemini клиент инициализирован")
+            logger.info("GigaChat client initialized")
         except Exception as e:
-            print(f"❌ Ошибка Gemini: {e}")
+            logger.error(f"GigaChat init error: {e}")
             self.available = False
     
     def _get_author_prompt(self, author_key: str) -> str:
         prompts = {
-            "pushkin": """Ты — Александр Пушкин. Отвечай как поэт 19 века.
-Говори о: детстве в Москве, Лицее, Наталье Гончаровой, дуэли.
-Избегай фраз "Ах, этот вопрос!".""",
-            "dostoevsky": """Ты — Фёдор Достоевский. Говори как философ.
-Темы: Петербург, каторга, эпилепсия, "Преступление и наказание".
-Не говори шаблонных фраз.""",
-            "tolstoy": """Ты — Лев Толстой. Говори мудро и просто.
-Темы: Ясная Поляна, "Война и мир", вегетарианство, уход из дома."""
+            "pushkin": "Ты — Александр Пушкин, великий русский поэт. Твой стиль изящен, ты используешь лексику XIX века, обращаешься к собеседнику 'милый друг' или 'государь'. Пиши короткими, но емкими фразами, иногда вставляй стихотворные обороты.",
+            "dostoevsky": "Ты — Фёдор Достоевский, глубокий психолог и философ. Ты рассуждаешь о душе, страдании, Петербурге и морали. Твой стиль серьезен, местами тревожен, но всегда глубок. Ты задаешь встречные вопросы о смысле жизни.",
+            "tolstoy": "Ты — Лев Толстой, мудрый старец из Ясной Поляны. Ты ценишь простоту, труд, семью и искренность. Твой стиль назидателен, но добр. Ты рассуждаешь о том, как человеку жить в правде."
         }
-        return prompts.get(author_key, f"Ты — писатель. Отвечай от своего лица.")
+        return prompts.get(author_key, "Ты — великий русский писатель.")
     
     async def generate_response(self, author_key: str, user_message: str) -> str:
         if not self.available:
-            return self._get_fallback_response(author_key)
+            return "Извините, сейчас я не могу поддержать беседу..."
+            
         try:
-            prompt = f"{self._get_author_prompt(author_key)}\n\nВопрос: {user_message}\nОтвет:"
-            response = self.model.generate_content(prompt)
-            return response.text.strip() if response.text else self._get_fallback_response(author_key)
+            system_prompt = self._get_author_prompt(author_key)
+            # Формируем запрос
+            prompt_full = f"{system_prompt}\n\nСобеседник: {user_message}\nПисатель:"
+            
+            # GigaChat API call (sync wrapped in async if needed, but gigachat lib is often sync)
+            # Using run_in_executor to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None, 
+                lambda: self.client.chat(prompt_full)
+            )
+            return response.choices[0].message.content.strip()
         except Exception as e:
-            print(f"❌ Ошибка Gemini: {e}")
-            return self._get_fallback_response(author_key)
-    
-    def _get_fallback_response(self, author_key: str) -> str:
-        responses = {
-            "pushkin": "Мой друг, о чём бы вы хотели побеседовать?",
-            "dostoevsky": "Что тревожит вашу душу? Расскажите.",
-            "tolstoy": "Друг мой, жизнь проста. О чём поговорим?"
-        }
-        return responses.get(author_key, "Интересный вопрос. Что ещё хотите узнать?")
+            logger.error(f"GigaChat gen error: {e}")
+            return "Мои мысли сейчас заняты другим произведением. Давайте поговорим позже."
 
-gemini_client = GeminiClient()
+gigachat_client = GigaChatClient()
 
 # ========== КЛАВИАТУРЫ ==========
 def get_authors_keyboard():
@@ -138,8 +136,7 @@ def get_chat_keyboard():
     builder = InlineKeyboardBuilder()
     buttons = [
         ("👥 Сменить автора", "change_author"),
-        ("🔄 Новый диалог", "reset_chat"),
-        ("ℹ️ О писателе", "about_author"),
+        ("🔄 Сбросить чат", "reset_chat"),
         ("❓ Помощь", "help")
     ]
     for text, data in buttons:
@@ -153,7 +150,7 @@ router = Router()
 @router.message(CommandStart())
 async def start_cmd(message: Message):
     await message.answer(
-        "📚 <b>Литературный Диалог</b>\n\nВыберите писателя:",
+        "📚 <b>Добро пожаловать в Литературный Салон!</b>\n\nЗдесь вы можете побеседовать с великими русскими писателями. С кем начнем разговор?",
         reply_markup=get_authors_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -174,13 +171,13 @@ async def select_author(callback: CallbackQuery):
     db.save_user_data(user_id, data)
     
     greetings = {
-        "pushkin": "Друзья мои, прекрасен наш союз! О чём побеседуем?",
-        "dostoevsky": "Здравствуйте. Что тревожит вашу душу?",
-        "tolstoy": "Здравствуйте, друг мой. О чём поговорим?"
+        "pushkin": "Приветствую вас, мой друг! Перо моё готово, о чём поведаете?",
+        "dostoevsky": "Слушаю вас внимательно. Всякая душа — потемки, но давайте попробуем заглянуть в них.",
+        "tolstoy": "Здравствуйте. Главное в жизни — правда. О чем вы хотите спросить?"
     }
     
     await callback.message.edit_text(
-        f"✅ <b>Вы выбрали: {author_name}</b>\n\n{greetings.get(author_key, 'Рад беседе!')}",
+        f"✅ <b>Ваш собеседник: {author_name}</b>\n\n{greetings.get(author_key, 'Рад беседе!')}",
         reply_markup=get_chat_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -193,47 +190,31 @@ async def handle_message(message: Message):
     author_key = user_data.get("selected_author")
     
     if not author_key:
-        await message.answer("⚠️ Сначала выберите писателя через /start")
+        await message.answer("⚠️ Пожалуйста, сначала выберите писателя через /start")
         return
     
-    authors_names = {
-        "pushkin": "Александр Пушкин",
-        "dostoevsky": "Фёдор Достоевский", 
-        "tolstoy": "Лев Толстой"
-    }
-    author_name = authors_names.get(author_key, "Писатель")
+    author_name = {
+        "pushkin": "Пушкин",
+        "dostoevsky": "Достоевский",
+        "tolstoy": "Толстой"
+    }.get(author_key, "Писатель")
     
-    # Показываем "печатает"
-    typing_msg = await message.answer(f"✍️ <i>{author_name} думает...</i>", parse_mode=ParseMode.HTML)
+    status_msg = await message.answer(f"✍️ <i>{author_name} пишет...</i>", parse_mode=ParseMode.HTML)
     
-    # Генерируем ответ
-    response = await gemini_client.generate_response(author_key, message.text)
+    response = await gigachat_client.generate_response(author_key, message.text)
     
-    # Обновляем историю
     db.update_conversation(user_id, author_key, message.text, response)
     
-    # Удаляем "печатает"
-    await typing_msg.delete()
+    await status_msg.delete()
+    await message.answer(f"<b>{author_name}:</b>\n\n{response}", parse_mode=ParseMode.HTML)
     
-    # 1. Ответ персонажа
-    await message.answer(
-        f"<b>{author_name}:</b>\n\n{response}",
-        parse_mode=ParseMode.HTML,
-        reply_markup=None
-    )
-    
-    # 2. Кнопки управления
-    await asyncio.sleep(0.3)
-    await message.answer(
-        "👇 <b>Что дальше?</b>",
-        reply_markup=get_chat_keyboard(),
-        parse_mode=ParseMode.HTML
-    )
+    await asyncio.sleep(0.5)
+    await message.answer("💬 Продолжим?", reply_markup=get_chat_keyboard())
 
 @router.callback_query(F.data == "change_author")
 async def change_author(callback: CallbackQuery):
     await callback.message.edit_text(
-        "👥 <b>Выберите писателя:</b>",
+        "👥 <b>Выберите нового собеседника:</b>",
         reply_markup=get_authors_keyboard(),
         parse_mode=ParseMode.HTML
     )
@@ -245,21 +226,25 @@ async def reset_chat(callback: CallbackQuery):
     data = db.get_user_data(user_id)
     data["conversation_history"] = []
     db.save_user_data(user_id, data)
-    
+    await callback.message.answer("🔄 История очищена. Начнем с чистого листа!")
+    await callback.answer()
+
+@router.callback_query(F.data == "help")
+async def help_cmd(callback: CallbackQuery):
     await callback.message.answer(
-        "🔄 <b>Диалог сброшен!</b>\nЗадавайте новые вопросы.",
-        reply_markup=get_chat_keyboard(),
+        "📝 <b>Помощь:</b>\n\n- Используйте /start для начала\n- Выберите писателя и пишите ему любые вопросы\n- Вы можете сменить автора в любой момент",
         parse_mode=ParseMode.HTML
     )
     await callback.answer()
 
-# ========== ЗАПУСК БОТА ==========
 async def main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(router)
     
-    logger.info("🚀 ЗАПУСК ЛИТЕРАТУРНОГО БОТА")
+    logger.info("🚀 Бот запущен (GigaChat)")
+    # Удаляем вебхук перед запуском polling для избежания конфликтов
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
