@@ -1,5 +1,7 @@
+@@ -1,5 +1,34 @@
 # Python
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 *.so
@@ -14,6 +16,7 @@ ENV/
 
 # Environment variables
 .env
+data/
 .env.local
 
 # IDE
@@ -31,4 +34,3 @@ Thumbs.db
 logs/
 
 # Data files
-data/user_*.json
