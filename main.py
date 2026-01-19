@@ -37,18 +37,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Импорты из наших модулей
+# Импорты из наших модулей с обработкой ошибок
 try:
     from database import db
     from gigachat_client import GigaChatClient
-    from keyboards.inline_keyboards import get_authors_keyboard, get_chat_keyboard
 except ImportError as e:
     logger.error(f"❌ Ошибка импорта модулей: {e}")
-    logger.error("Проверьте структуру папок и файлы")
-    exit(1)
+    logger.error("Создаем заглушки...")
+    
+    # Создаем простую заглушку для базы данных
+    class SimpleDB:
+        def get_user_data(self, user_id):
+            return {"user_id": user_id, "selected_author": None, "conversation_history": []}
+        def save_user_data(self, user_id, data):
+            pass
+        def update_conversation(self, user_id, author_key, user_message, bot_response):
+            pass
+        def reset_conversation(self, user_id):
+            pass
+    
+    db = SimpleDB()
+    
+    # Заглушка для GigaChatClient
+    class SimpleGigaChat:
+        def __init__(self, *args, **kwargs):
+            self.available = False
+        async def generate_response(self, *args, **kwargs):
+            return "GigaChat временно недоступен. Используйте режим заглушек."
 
 # Инициализация клиентов
-gigachat_client = GigaChatClient(GIGACHAT_CREDENTIALS)
+try:
+    gigachat_client = GigaChatClient(GIGACHAT_CREDENTIALS)
+except:
+    gigachat_client = SimpleGigaChat()
 
 # Создаем роутер
 router = Router()
@@ -93,9 +114,9 @@ AUTHORS = {
     }
 }
 
-# ========== ПРОСТАЯ КЛАВИАТУРА (если основной модуль не работает) ==========
+# ========== ПРОСТАЯ КЛАВИАТУРА ==========
 def get_simple_authors_keyboard():
-    """Простая клавиатура для теста"""
+    """Простая клавиатура для выбора автора"""
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     keyboard = [
@@ -105,7 +126,8 @@ def get_simple_authors_keyboard():
         [InlineKeyboardButton(text="👻 Гоголь", callback_data="author_gogol")],
         [InlineKeyboardButton(text="🏥 Чехов", callback_data="author_chekhov")],
         [InlineKeyboardButton(text="💪 Гигачад", callback_data="author_gigachad")],
-        [InlineKeyboardButton(text="❓ Помощь", callback_data="help")]
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="help")],
+        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -239,6 +261,18 @@ async def author_selected_callback(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"❌ Ошибка в выборе автора: {e}")
         await callback.answer("Ошибка выбора автора")
+
+@router.callback_query(F.data == "help")
+async def help_callback(callback: CallbackQuery):
+    """Обработчик кнопки помощи"""
+    await cmd_help(callback.message)
+    await callback.answer()
+
+@router.callback_query(F.data == "main_menu")
+async def main_menu_callback(callback: CallbackQuery):
+    """Возврат в главное меню"""
+    await cmd_start(callback.message)
+    await callback.answer()
 
 # ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
 @router.message(F.text)
