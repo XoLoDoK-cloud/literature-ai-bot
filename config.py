@@ -1,16 +1,12 @@
 import os
 from dotenv import load_dotenv
-
 load_dotenv()
-
 # Токены
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
+GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
 # Проверка
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден!")
-if not GEMINI_API_KEY:
-    print("⚠️ GEMINI_API_KEY не найден, будут использоваться заглушки")
-
+if not GIGACHAT_CREDENTIALS:
+    print("⚠️ GIGACHAT_CREDENTIALS не найден, будут использоваться заглушки")
 print("✅ Конфигурация загружена")
