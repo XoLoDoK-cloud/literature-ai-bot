@@ -1,92 +1,82 @@
-import asyncio
-from aiogram import Router, F
-from aiogram.types import Message
-from aiogram.enums import ParseMode
+from datetime import datetime
+from services.daily_quotes import daily_quotes
 
-from keyboards.inline_keyboards import get_chat_keyboard, AUTHORS
-from services.database import db
-from services.gemini_client import gemini_client
+async def show_author_profile(callback: CallbackQuery, author_key: str):
+    """Показывает красивый профиль автора"""
+    
+    author_profiles = {
+        "pushkin": {
+            "name": "Александр Пушкин",
+            "emoji": "🖋️",
+            "birth": "06.06.1799 - 10.02.1837",
+            "title": "Великий русский поэт",
+            "achievements": [
+                "Создатель современного русского языка",
+                "Автор 800+ стихотворений",
+                "Родоначальник русской литературы"
+            ],
+            "fun_fact": "Знавший 16 языков, включая французский, латынь и древнегреческий"
+        },
+        "dostoevsky": {
+            "name": "Фёдор Достоевский",
+            "emoji": "📚",
+            "birth": "11.11.1821 - 09.02.1881",
+            "title": "Писатель-философ",
+            "achievements": [
+                "Мастер психологического анализа",
+                "Предсказатель XX века в литературе",
+                "Автор 5 великих романов"
+            ],
+            "fun_fact": "Пережил инсценировку казни и 4 года каторги"
+        },
+        "gigachad": {
+            "name": "💪 ГИГАЧАД",
+            "emoji": "💪",
+            "birth": "Легенда - Вечность",
+            "title": "Мотивационный литературный эксперт",
+            "achievements": [
+                "Прокачал сознание 1000+ читателей",
+                "Связал классику с саморазвитием",
+                "Создатель философии прокачки"
+            ],
+            "fun_fact": "Читает по 2 книги в день и делает 100 отжиманий"
+        }
+    }
+    
+    profile = author_profiles.get(author_key, author_profiles["pushkin"])
+    quote = daily_quotes.get_daily_quote(author_key)
+    
+    # Формируем красивый профиль
+    profile_text = f"""
+{profile['emoji']} <b>{profile['name'].upper()}</b>
+<code>{'═' * 35}</code>
 
-# ИНИЦИАЛИЗИРУЕМ РОУТЕР ДЛЯ TELEGRAM БОТА
-router = Router()
+📅 <b>Годы жизни:</b> {profile['birth']}
+🎭 <b>Титул:</b> {profile['title']}
 
-@router.message(F.text)
-async def handle_message(message: Message):
-    """Обработка текстовых сообщений для Telegram бота"""
-    user_id = message.from_user.id
-    user_data = db.get_user_data(user_id)
+📚 <b>Достижения:</b>
+"""
     
-    # Проверяем, выбран ли автор
-    author_key = user_data.get("selected_author")
-    if not author_key or author_key not in AUTHORS:
-        await message.answer(
-            "⚠️ <b>Сначала выберите писателя!</b>\n\n"
-            "Используйте команду /start для выбора автора.",
-            parse_mode=ParseMode.HTML
-        )
-        return
+    for i, achievement in enumerate(profile['achievements'], 1):
+        profile_text += f"{i}. {achievement}\n"
     
-    author = AUTHORS[author_key]
+    profile_text += f"""
+💡 <b>Интересный факт:</b>
+{profile['fun_fact']}
+
+<code>{'═' * 35}</code>
+
+📖 <b>ЦИТАТА ДНЯ:</b>
+<blockquote>"{quote['text']}"</blockquote>
+<i>— {quote['work']}</i>
+
+<code>{'═' * 35}</code>
+
+👇 <b>Задайте вопрос автору:</b>
+"""
     
-    # Показываем статус "печатает"
-    typing_msg = await message.answer(
-        f"✍️ <i>{author['name']} обдумывает ответ...</i>",
-        parse_mode=ParseMode.HTML
+    await callback.message.answer(
+        profile_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_chat_keyboard(callback.from_user.id)
     )
-    
-    try:
-        # Получаем историю диалога
-        history = user_data.get("conversation_history", [])
-        
-        # Форматируем историю для Gemini
-        formatted_history = []
-        for msg in history:
-            role = "user" if msg["role"] == "user" else "assistant"
-            formatted_history.append({"role": role, "content": msg["content"]})
-        
-        # Генерируем ответ через Gemini
-        response = await gemini_client.generate_author_response(
-            author_key=author_key,
-            author_name=author["name"],
-            user_message=message.text,
-            conversation_history=formatted_history
-        )
-        
-        # Обновляем историю в базе данных
-        db.update_conversation(user_id, author_key, message.text, response)
-        
-        # Удаляем сообщение "печатает"
-        await typing_msg.delete()
-        
-        # 1. Отправляем ответ персонажа (ТОЛЬКО ответ, без кнопок)
-        await message.answer(
-            f"<b>{author['emoji']} {author['name']}:</b>\n\n{response}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=None  # Важно: никаких кнопок в ответе персонажа
-        )
-        
-        # 2. Отдельным сообщением отправляем кнопки управления
-        await asyncio.sleep(0.3)
-        await message.answer(
-            "👇 <b>Что дальше?</b>",
-            reply_markup=get_chat_keyboard(),
-            parse_mode=ParseMode.HTML
-        )
-        
-    except Exception as e:
-        # Удаляем сообщение "печатает" в случае ошибки
-        try:
-            await typing_msg.delete()
-        except:
-            pass
-        
-        print(f"❌ Ошибка в handle_message: {e}")
-        await message.answer(
-            "❌ <b>Произошла ошибка</b>\n\n"
-            "Попробуйте:\n"
-            "1. Перезапустить бота: /start\n"
-            "2. Задать вопрос иначе\n"
-            "3. Подождать несколько минут",
-            reply_markup=get_chat_keyboard(),
-            parse_mode=ParseMode.HTML
-        )
