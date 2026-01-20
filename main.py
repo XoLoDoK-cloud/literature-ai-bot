@@ -307,10 +307,30 @@ async def cmd_start(message: Message):
         user_data["first_name"] = user_name
         db.save_user_data(user_id, user_data)
         
+        welcome_text = f"""
+<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
+
+✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨
+
+<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
+
+👋 <b>Привет, {user_name}!</b>
+
+🎭 <i>Погрузитесь в мир русской классической литературы</i>
+
+💬 <b>Я могу представить любого русского классика.</b>
+<b>Выберите писателя и задайте ему любой вопрос.</b>
+
+<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
+
+👇 <b>Выберите автора для диалога:</b>
+"""
+        
+        # Используем красивую клавиатуру
         await message.answer(
-            format_welcome(user_name),
+            welcome_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_authors_keyboard()  # ← ЗДЕСЬ
         )
         
         logger.info(f"✅ Старт: {user_id} (@{message.from_user.username})")
@@ -318,7 +338,6 @@ async def cmd_start(message: Message):
     except Exception as e:
         logger.error(f"❌ Ошибка в /start: {e}")
         await message.answer("Произошла ошибка. Попробуйте позже.")
-
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     """Обработчик команды /help"""
