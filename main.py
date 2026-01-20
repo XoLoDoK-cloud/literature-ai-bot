@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 
 # Импорты из наших модулей с обработкой ошибок
 try:
-    from database import db
-    from gigachat_client import GigaChatClient
+    from services.database import db
+    from services.gigachat_client import GigaChatClient
 except ImportError as e:
     logger.error(f"❌ Ошибка импорта модулей: {e}")
     logger.error("Создаем заглушки...")
