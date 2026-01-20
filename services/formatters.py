@@ -14,16 +14,8 @@ def create_header(title: str, emoji: str = "") -> str:
     """Создает красивый заголовок"""
     if emoji:
         title = f"{emoji} {title}"
-    
     border = "═" * 40
     return f"\n{border}\n{title}\n{border}\n"
-
-def create_progress_bar(value: int, max_value: int, length: int = 10) -> str:
-    """Создает прогресс-бар"""
-    percentage = min(value / max_value * 100, 100)
-    filled = int(percentage / 100 * length)
-    bar = "█" * filled + "░" * (length - filled)
-    return f"[{bar}] {percentage:.1f}%"
 
 def format_list(items: list, emoji: str = "•") -> str:
     """Форматирует список с эмодзи"""
@@ -31,8 +23,3 @@ def format_list(items: list, emoji: str = "•") -> str:
     for item in items:
         formatted += f"{emoji} {item}\n"
     return formatted
-
-def create_card(title: str, content: str, border_char: str = "─") -> str:
-    """Создает карточку с рамкой"""
-    border = border_char * 40
-    return f"{border}\n🎴 {bold(title)}\n{content}\n{border}"
