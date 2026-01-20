@@ -7,32 +7,88 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+try:
+    from gigachat import GigaChat
+    from gigachat.models import Chat, Messages, MessagesRole
+    GIGACHAT_AVAILABLE = True
+except ImportError:
+    GIGACHAT_AVAILABLE = False
+    logger.warning("GigaChat library not available, using fallbacks")
+
 class GigaChatClient:
     """Клиент для работы с GigaChat API или заглушками"""
     
     def __init__(self, credentials: str = None, model: str = "GigaChat:latest"):
         self.credentials = credentials
         self.model = model
-        self.available = False  # По умолчанию используем заглушки
+        self.available = False
+        self.client = None
         
-        if self.credentials and self.credentials != "ваш_ключ_gigachat":
-            print("⚠️ Настоящий GigaChat требует установки библиотеки gigachat")
-            print("   pip install gigachat")
+        if GIGACHAT_AVAILABLE and self.credentials and self.credentials != "ваш_ключ_gigachat":
+            try:
+                self.client = GigaChat(credentials=self.credentials, verify_ssl_certs=False)
+                self.available = True
+                print("✅ GigaChat подключен успешно")
+            except Exception as e:
+                logger.error(f"Ошибка подключения GigaChat: {e}")
+                print(f"⚠️ GigaChat недоступен: {e}")
+                print("   Используем умные заглушки")
+        else:
+            if not GIGACHAT_AVAILABLE:
+                print("⚠️ Библиотека gigachat не установлена")
+            elif not self.credentials:
+                print("⚠️ GIGACHAT_CREDENTIALS не указан")
             print("   Используем умные заглушки")
+    
+    def _get_author_prompt(self, author_key: str, author_name: str, gigachad_mode: bool) -> str:
+        """Возвращает системный промпт для автора"""
+        prompts = {
+            "pushkin": f"Ты — {author_name}, великий русский поэт. Отвечай изящно, с поэтическими оборотами, упоминая свои произведения когда уместно.",
+            "dostoevsky": f"Ты — {author_name}, великий русский писатель и философ. Отвечай глубоко, затрагивая темы души, морали и человеческой природы.",
+            "tolstoy": f"Ты — {author_name}, великий русский мыслитель и писатель. Отвечай мудро, просто но глубоко, с философским подтекстом.",
+            "gogol": f"Ты — {author_name}, русский прозаик. Отвечай с юмором и гротеском, иногда мистически, в своём узнаваемом стиле.",
+            "chekhov": f"Ты — {author_name}, русский писатель и врач. Отвечай кратко, точно, с тонкой иронией и наблюдательностью.",
+            "gigachad": "Ты — Гигачад, мотивационный литературный эксперт. Отвечай МОЩНО и ЭНЕРГИЧНО, используй эмодзи 💪🔥🚀, вдохновляй на чтение классики и саморазвитие!"
+        }
+        return prompts.get(author_key, f"Ты — {author_name}. Отвечай в характерной для тебя манере.")
     
     async def generate_response(self, author_key: str, author_name: str, 
                                user_message: str, conversation_history: list = None,
                                gigachad_mode: bool = False, what_if_mode: bool = False) -> str:
         """Генерирует интеллектуальный ответ от лица автора"""
         
-        # Используем умные заглушки
-        return self._get_intelligent_fallback(author_key, user_message, gigachad_mode, what_if_mode)
+        if not self.available or not self.client:
+            return self._get_intelligent_fallback(author_key, user_message, gigachad_mode, what_if_mode)
+        
+        try:
+            system_prompt = self._get_author_prompt(author_key, author_name, gigachad_mode)
+            
+            messages = [
+                Messages(role=MessagesRole.SYSTEM, content=system_prompt)
+            ]
+            
+            if conversation_history:
+                for msg in conversation_history[-6:]:
+                    role = MessagesRole.USER if msg.get("role") == "user" else MessagesRole.ASSISTANT
+                    messages.append(Messages(role=role, content=msg.get("content", "")))
+            
+            messages.append(Messages(role=MessagesRole.USER, content=user_message))
+            
+            response = await asyncio.to_thread(
+                self.client.chat,
+                Chat(messages=messages, model=self.model)
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"Ошибка GigaChat API: {e}")
+            return self._get_intelligent_fallback(author_key, user_message, gigachad_mode, what_if_mode)
     
     def _get_intelligent_fallback(self, author_key: str, user_message: str, 
                                  gigachad_mode: bool, what_if_mode: bool) -> str:
         """Интеллектуальные заглушки"""
         
-        # Анализируем вопрос пользователя
         question_lower = user_message.lower()
         
         if "что если" in question_lower or what_if_mode:
@@ -44,7 +100,6 @@ class GigaChatClient:
             return random.choice(what_if_responses)
         
         elif gigachad_mode or author_key == "gigachad":
-            # Адаптируем ответ под тему вопроса
             if any(word in question_lower for word in ["книг", "читать", "чтение"]):
                 gigachad_responses = [
                     "💪 КНИГИ — ЭТО ЖЕЛЕЗО ДЛЯ МОЗГА! Читай каждый день, как делаешь подходы на жим!",
@@ -66,7 +121,6 @@ class GigaChatClient:
             return random.choice(gigachad_responses)
         
         else:
-            # Умные заглушки для классиков
             if author_key == "pushkin":
                 responses = [
                     "Позвольте, я обдумаю ваш вопрос... Ведь каждая мысль требует изящного выражения.",
