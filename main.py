@@ -468,9 +468,27 @@ async def author_selected_callback(callback: CallbackQuery):
         db.save_user_data(user_id, user_data)
         
         await callback.message.edit_text(
-            format_author_selected(author, user_name),
+            f"""
+<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
+
+✨ <b>АВТОР ВЫБРАН</b> ✨
+
+<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
+
+{author['emoji']} <b>{author['name']}</b>
+<i>{author['birth']} • {author['description']}</i>
+
+<code>──────────────────────────────</code>
+
+💬 <b>{author['greeting']}</b>
+
+<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
+
+<code>💡 Теперь вы можете задавать вопросы!</code>
+<code>🎭 Автор ответит в своем уникальном стиле</code>
+""",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_chat_keyboard()
+            reply_markup=get_chat_keyboard()  # ← ЗДЕСЬ
         )
         
         await callback.answer(f"Выбран: {author['name'].split()[0]}")
