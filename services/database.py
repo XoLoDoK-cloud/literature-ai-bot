@@ -1,4 +1,3 @@
-# ========== database.py ==========
 import json
 import os
 from datetime import datetime
@@ -6,8 +5,8 @@ from datetime import datetime
 class SimpleDatabase:
     """Простая база данных на JSON файлах"""
     
-    def __init__(self):
-        self.data_dir = "data"
+    def __init__(self, data_dir: str = "data"):
+        self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
     
     def _get_user_file(self, user_id: int) -> str:
@@ -67,9 +66,9 @@ class SimpleDatabase:
         data["selected_author"] = author_key
         data["message_count"] = len(data["conversation_history"]) // 2
         
-        # Ограничиваем историю
-        if len(data["conversation_history"]) > 10:
-            data["conversation_history"] = data["conversation_history"][-10:]
+        # Ограничиваем историю (последние 20 сообщений)
+        if len(data["conversation_history"]) > 20:
+            data["conversation_history"] = data["conversation_history"][-20:]
         
         self.save_user_data(user_id, data)
     
