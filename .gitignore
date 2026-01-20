@@ -1,4 +1,3 @@
-@@ -1,5 +1,34 @@
 # Python
 __pycache__/
 *.py[cod]
@@ -12,6 +11,7 @@ env/
 venv/
 env/
 ENV/
+.pythonlibs/
 
 # Environment variables
 .env
@@ -32,3 +32,9 @@ Thumbs.db
 logs/
 
 # Data files
+data/
+
+# Replit
+.cache/
+.local/
+.upm/
