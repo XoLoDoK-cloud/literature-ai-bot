@@ -584,4 +584,3 @@ class GigaChatClient:
 
 # Глобальный экземпляр (будет создан в main.py)
 gigachat_client = None
-[file content end]
