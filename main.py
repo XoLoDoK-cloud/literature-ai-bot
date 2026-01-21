@@ -1,5 +1,18 @@
 # ========== ЛИТЕРАТУРНЫЙ ДИАЛОГ БОТ ==========
 
+# Предотвращаем спящий режим
+import time
+import sys
+import os
+
+# Длительный timeout для веб-запросов
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+# Увеличиваем лимиты
+import asyncio
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import asyncio
 import logging
 import sys
