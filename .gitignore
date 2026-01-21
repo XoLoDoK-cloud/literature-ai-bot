@@ -31,7 +31,7 @@ Thumbs.db
 *.log
 logs/
 
-# Data files
+# Data files (не добавляем в git, но создаем при запуске)
 data/
 
 # Replit
