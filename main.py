@@ -1,6 +1,3 @@
-[file name]: main.py
-[file content begin]
-#!/usr/bin/env python3
 # ========== ЛИТЕРАТУРНЫЙ ДИАЛОГ БОТ ==========
 
 import asyncio
