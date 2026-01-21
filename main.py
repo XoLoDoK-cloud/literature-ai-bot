@@ -915,4 +915,3 @@ if __name__ == "__main__":
         print("\n⏹️ Бот остановлен пользователем")
     except Exception as e:
         print(f"\n❌ Непредвиденная ошибка: {e}")
-[file content end]
