@@ -25,6 +25,10 @@ if not BOT_TOKEN:
     print("Создайте файл .env с BOT_TOKEN=ваш_токен")
     exit(1)
 
+# Создаем папку data если её нет
+if not os.path.exists("data"):
+    os.makedirs("data")
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -36,16 +40,19 @@ logger = logging.getLogger(__name__)
 # Импорты из наших модулей
 try:
     from services.database import db
-    from services.gigachat_client import GigaChatClient
-    from services.knowledge_base import search_in_knowledge  # Новая база знаний
+    from services.gigachat_client import gigachat_client
+    from services.knowledge_base import search_in_knowledge
+    from services.inline_keyboards import (
+        get_authors_keyboard,
+        get_chat_keyboard,
+        get_main_menu_keyboard,
+        get_compact_authors_keyboard
+    )
     logger.info("✅ Все модули успешно импортированы")
 except ImportError as e:
     logger.error(f"❌ Ошибка импорта модулей: {e}")
     logger.error("Убедитесь, что все файлы в папке services/")
     exit(1)
-
-# Инициализация клиента (работает в фоне)
-gigachat_client = GigaChatClient(os.getenv("GIGACHAT_CREDENTIALS"))
 
 # Создаем роутер
 router = Router()
@@ -96,108 +103,6 @@ AUTHORS = {
     }
 }
 
-# ========== КРАСИВЫЕ КЛАВИАТУРЫ В 2 РЯДА ==========
-def get_authors_keyboard():
-    """Клавиатура выбора автора - красивое расположение в 2 ряда"""
-    keyboard = [
-        # Первый ряд: 3 кнопки
-        [
-            InlineKeyboardButton(text="🖋️ Пушкин", callback_data="author_pushkin"),
-            InlineKeyboardButton(text="📚 Достоевский", callback_data="author_dostoevsky"),
-            InlineKeyboardButton(text="✍️ Толстой", callback_data="author_tolstoy")
-        ],
-        # Второй ряд: 3 кнопки
-        [
-            InlineKeyboardButton(text="👻 Гоголь", callback_data="author_gogol"),
-            InlineKeyboardButton(text="🏥 Чехов", callback_data="author_chekhov"),
-            InlineKeyboardButton(text="💪 ГИГАЧАД", callback_data="author_gigachad")
-        ],
-        # Третий ряд: 2 кнопки
-        [
-            InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
-            InlineKeyboardButton(text="📊 Статистика", callback_data="stats")
-        ],
-        # Четвертый ряд: 2 кнопки
-        [
-            InlineKeyboardButton(text="ℹ️ О боте", callback_data="about"),
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-def get_chat_keyboard():
-    """Клавиатура во время диалога - также в 2 ряда"""
-    keyboard = [
-        # Первый ряд: 2 кнопки
-        [
-            InlineKeyboardButton(text="👥 Сменить автора", callback_data="change_author"),
-            InlineKeyboardButton(text="🔄 Новый диалог", callback_data="reset_chat")
-        ],
-        # Второй ряд: 2 кнопки
-        [
-            InlineKeyboardButton(text="ℹ️ Об авторе", callback_data="about_author"),
-            InlineKeyboardButton(text="📋 Все авторы", callback_data="list_authors")
-        ],
-        # Третий ряд: 1 кнопка по центру
-        [
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-def get_compact_authors_keyboard():
-    """Компактная клавиатура для выбора автора (только эмодзи в первом ряду)"""
-    keyboard = [
-        # Первый ряд: только эмодзи (5 кнопок)
-        [
-            InlineKeyboardButton(text="🖋️", callback_data="author_pushkin"),
-            InlineKeyboardButton(text="📚", callback_data="author_dostoevsky"),
-            InlineKeyboardButton(text="✍️", callback_data="author_tolstoy"),
-            InlineKeyboardButton(text="👻", callback_data="author_gogol"),
-            InlineKeyboardButton(text="🏥", callback_data="author_chekhov")
-        ],
-        # Второй ряд: имена авторов (3 кнопки)
-        [
-            InlineKeyboardButton(text="🖋️ Пушкин", callback_data="author_pushkin"),
-            InlineKeyboardButton(text="📚 Достоевский", callback_data="author_dostoevsky"),
-            InlineKeyboardButton(text="✍️ Толстой", callback_data="author_tolstoy")
-        ],
-        # Третий ряд: имена авторов (3 кнопки)
-        [
-            InlineKeyboardButton(text="👻 Гоголь", callback_data="author_gogol"),
-            InlineKeyboardButton(text="🏥 Чехов", callback_data="author_chekhov"),
-            InlineKeyboardButton(text="💪 ГИГАЧАД", callback_data="author_gigachad")
-        ],
-        # Четвертый ряд: служебные кнопки
-        [
-            InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-def get_main_menu_keyboard():
-    """Главное меню - красивое расположение"""
-    keyboard = [
-        # Первый ряд: 3 кнопки
-        [
-            InlineKeyboardButton(text="🎭 Выбрать автора", callback_data="select_author"),
-            InlineKeyboardButton(text="📚 Все писатели", callback_data="all_authors"),
-            InlineKeyboardButton(text="💪 ГИГАЧАД", callback_data="author_gigachad")
-        ],
-        # Второй ряд: 2 кнопки
-        [
-            InlineKeyboardButton(text="📊 Моя статистика", callback_data="stats"),
-            InlineKeyboardButton(text="🔄 Сбросить диалог", callback_data="reset_chat")
-        ],
-        # Третий ряд: 2 кнопки
-        [
-            InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
-            InlineKeyboardButton(text="ℹ️ О боте", callback_data="about")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
 # ========== КРАСИВОЕ ФОРМАТИРОВАНИЕ ==========
 def format_welcome(user_name: str) -> str:
     """Красивое приветственное сообщение"""
@@ -220,28 +125,6 @@ def format_welcome(user_name: str) -> str:
 👇 <b>Выберите автора для диалога:</b>
 """
 
-def format_author_selected(author: dict, user_name: str) -> str:
-    """Красивое сообщение о выборе автора"""
-    return f"""
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-✨ <b>АВТОР ВЫБРАН</b> ✨
-
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-{author['emoji']} <b>{author['name']}</b>
-<i>{author['birth']} • {author['description']}</i>
-
-<code>──────────────────────────────</code>
-
-💬 <b>{author['greeting']}</b>
-
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-<code>💡 Теперь вы можете задавать вопросы!</code>
-<code>🎭 Автор ответит в своем уникальном стиле</code>
-"""
-
 def format_no_author(user_name: str) -> str:
     """Красивое сообщение при отсутствии автора"""
     return f"""
@@ -253,44 +136,6 @@ def format_no_author(user_name: str) -> str:
 
 👋 <b>{user_name}, чтобы начать диалог,</b>
 <b>выберите писателя из списка:</b>
-
-<code>──────────────────────────────</code>
-
-✨ <i>Каждый автор имеет уникальный стиль:</i>
-
-<code>──────────────────────────────</code>
-
-🖋️ <b>Александр Пушкин</b>
-<i>Поэтичный, изящный, романтичный</i>
-
-<code>──────────────────────────────</code>
-
-📚 <b>Фёдор Достоевский</b>
-<i>Глубокий, философский, психологичный</i>
-
-<code>──────────────────────────────</code>
-
-✍️ <b>Лев Толстой</b>
-<i>Мудрый, простой, нравственный</i>
-
-<code>──────────────────────────────</code>
-
-👻 <b>Николай Гоголь</b>
-<i>Ироничный, гротескный, сатиричный</i>
-
-<code>──────────────────────────────</code>
-
-🏥 <b>Антон Чехов</b>
-<i>Лаконичный, точный, наблюдательный</i>
-
-<code>──────────────────────────────</code>
-
-💪 <b>ГИГАЧАД</b>
-<i>Энергичный, мотивирующий, прямолинейный</i>
-
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-<code>✨ Просто нажмите на кнопку с именем автора!</code>
 """
 
 # ========== КОМАНДЫ ==========
@@ -307,30 +152,12 @@ async def cmd_start(message: Message):
         user_data["first_name"] = user_name
         db.save_user_data(user_id, user_data)
         
-        welcome_text = f"""
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨
-
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-👋 <b>Привет, {user_name}!</b>
-
-🎭 <i>Погрузитесь в мир русской классической литературы</i>
-
-💬 <b>Я могу представить любого русского классика.</b>
-<b>Выберите писателя и задайте ему любой вопрос.</b>
-
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-👇 <b>Выберите автора для диалога:</b>
-"""
+        welcome_text = format_welcome(user_name)
         
-        # Используем красивую клавиатуру
         await message.answer(
             welcome_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()  # ← ЗДЕСЬ
+            reply_markup=get_authors_keyboard()
         )
         
         logger.info(f"✅ Старт: {user_id} (@{message.from_user.username})")
@@ -338,6 +165,7 @@ async def cmd_start(message: Message):
     except Exception as e:
         logger.error(f"❌ Ошибка в /start: {e}")
         await message.answer("Произошла ошибка. Попробуйте позже.")
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     """Обработчик команды /help"""
@@ -376,7 +204,7 @@ async def cmd_help(message: Message):
 
 <code>💡 Не стесняйтесь задавать любые вопросы!</code>
 """
-    await message.answer(help_text, parse_mode=ParseMode.HTML, reply_markup=get_authors_keyboard())
+    await message.answer(help_text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
 
 @router.message(Command("authors"))
 async def cmd_authors(message: Message):
@@ -429,42 +257,14 @@ async def cmd_authors(message: Message):
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
     """Статистика пользователя"""
+    from services.statistics import stats_service
+    
     user_id = message.from_user.id
     user_name = message.from_user.first_name
-    user_data = db.get_user_data(user_id)
     
-    stats_text = f"""
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-📊 <b>ВАША СТАТИСТИКА</b>
-
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-👤 <b>Пользователь:</b> {user_name}
-🆔 <b>ID:</b> <code>{user_id}</code>
-
-<code>──────────────────────────────</code>
-
-📈 <b>Активность:</b>
-💬 <b>Всего сообщений:</b> {user_data.get('message_count', 0)}
-🗓️ <b>Дата регистрации:</b> {user_data.get('created_at', 'Неизвестно')[:10]}
-
-<code>──────────────────────────────</code>
-
-🎭 <b>Текущий собеседник:</b>
-"""
+    stats_text = stats_service.format_user_stats(user_id, user_name)
     
-    author_key = user_data.get('selected_author')
-    if author_key and author_key in AUTHORS:
-        author = AUTHORS[author_key]
-        stats_text += f"{author['emoji']} <b>{author['name']}</b>"
-    else:
-        stats_text += "<i>Автор не выбран</i>"
-    
-    stats_text += f"\n\n<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>"
-    stats_text += f"\n<code>🎯 Продолжайте общение для новых достижений!</code>"
-    
-    await message.answer(stats_text, parse_mode=ParseMode.HTML, reply_markup=get_authors_keyboard())
+    await message.answer(stats_text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
 
 # ========== ОБРАБОТЧИКИ КНОПОК ==========
 @router.callback_query(F.data.startswith("author_"))
@@ -507,7 +307,7 @@ async def author_selected_callback(callback: CallbackQuery):
 <code>🎭 Автор ответит в своем уникальном стиле</code>
 """,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_chat_keyboard()  # ← ЗДЕСЬ
+            reply_markup=get_chat_keyboard()
         )
         
         await callback.answer(f"Выбран: {author['name'].split()[0]}")
@@ -550,7 +350,7 @@ async def about_callback(callback: CallbackQuery):
 <code>🎨 Разработано с любовью к литературе</code>
 <code>📚 Приятного общения с классиками!</code>
 """
-    await callback.message.answer(about_text, parse_mode=ParseMode.HTML, reply_markup=get_authors_keyboard())
+    await callback.message.answer(about_text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
     await callback.answer("ℹ️ О боте")
 
 @router.callback_query(F.data == "main_menu")
@@ -559,20 +359,20 @@ async def main_menu_callback(callback: CallbackQuery):
     await cmd_start(callback.message)
     await callback.answer("🏠 Главное меню")
 
-@router.callback_query(F.data == "change_author")
-async def change_author_callback(callback: CallbackQuery):
-    """Смена автора"""
+@router.callback_query(F.data == "select_author")
+async def select_author_callback(callback: CallbackQuery):
+    """Выбор автора"""
     user_id = callback.from_user.id
     user_name = callback.from_user.first_name
     
-    change_text = f"""
+    select_text = f"""
 <code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
 
-👥 <b>СМЕНА АВТОРА</b>
+👥 <b>ВЫБОР АВТОРА</b>
 
 <code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
 
-👋 <b>{user_name}, выберите нового собеседника:</b>
+👋 <b>{user_name}, выберите собеседника:</b>
 
 <code>──────────────────────────────</code>
 
@@ -586,14 +386,20 @@ async def change_author_callback(callback: CallbackQuery):
 
 <code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
 
-<code>🎭 Выберите автора для продолжения диалога!</code>
+<code>🎭 Выберите автора для начала диалога!</code>
 """
     
     await callback.message.edit_text(
-        change_text,
+        select_text,
         parse_mode=ParseMode.HTML,
         reply_markup=get_authors_keyboard()
     )
+    await callback.answer("👥 Выбор автора")
+
+@router.callback_query(F.data == "change_author")
+async def change_author_callback(callback: CallbackQuery):
+    """Смена автора"""
+    await select_author_callback(callback)
     await callback.answer("👥 Смена автора")
 
 @router.callback_query(F.data == "reset_chat")
@@ -634,6 +440,8 @@ async def reset_chat_callback(callback: CallbackQuery):
 @router.callback_query(F.data == "about_author")
 async def about_author_callback(callback: CallbackQuery):
     """Информация об авторе"""
+    from services.timeline_service import timeline_service
+    
     user_id = callback.from_user.id
     user_data = db.get_user_data(user_id)
     author_key = user_data.get("selected_author")
@@ -707,14 +515,11 @@ async def about_author_callback(callback: CallbackQuery):
     
     author_info += "\n".join(facts.get(author_key, ["• Информация обновляется..."]))
     
-    author_info += f"""
-
-<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
-
-<code>🎭 Продолжайте диалог, чтобы узнать лучше!</code>
-"""
+    # Добавляем таймлайн
+    timeline_text = timeline_service.get_author_timeline(author_key)
     
     await callback.message.answer(author_info, parse_mode=ParseMode.HTML)
+    await callback.message.answer(timeline_text, parse_mode=ParseMode.HTML)
     await callback.answer(f"📖 {author['name'].split()[0]}")
 
 @router.callback_query(F.data == "list_authors")
@@ -729,10 +534,16 @@ async def stats_callback(callback: CallbackQuery):
     await cmd_stats(callback.message)
     await callback.answer("📊 Статистика")
 
+@router.callback_query(F.data == "all_authors")
+async def all_authors_callback(callback: CallbackQuery):
+    """Все авторы"""
+    await cmd_authors(callback.message)
+    await callback.answer("👥 Все авторы")
+
 # ========== ОБРАБОТКА СООБЩЕНИЙ ==========
 @router.message(F.text)
 async def handle_message(message: Message):
-    """Обработка всех текстовых сообщений - УЛУЧШЕННАЯ ВЕРСИЯ"""
+    """Обработка всех текстовых сообщений"""
     try:
         user_id = message.from_user.id
         user_name = message.from_user.first_name
@@ -856,14 +667,14 @@ async def handle_message(message: Message):
 <code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
 """,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_main_menu_keyboard()
         )
 
 # ========== ЗАПУСК БОТА ==========
 async def main():
     """Запуск бота"""
     try:
-        # Создаем бота и диспетчер
+        # Создаем бот и диспетчер
         bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         dp = Dispatcher()
         dp.include_router(router)
