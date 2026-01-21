@@ -11,8 +11,8 @@ GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден в .env файле!")
 
-if not GIGACHAT_CREDENTIALS:
-    print("⚠️ ВНИМАНИЕ: GIGACHAT_CREDENTIALS не найден")
-    print("Бот будет работать без GigaChat (только заглушки)")
+if not GIGACHAT_CREDENTIALS or GIGACHAT_CREDENTIALS == "ваш_ключ_gigachat_здесь":
+    print("⚠️ ВНИМАНИЕ: GIGACHAT_CREDENTIALS не настроен")
+    GIGACHAT_CREDENTIALS = None
 
 print("✅ Конфигурация загружена")
