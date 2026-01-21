@@ -5,6 +5,21 @@ import logging
 import sys
 import os
 from datetime import datetime
+from threading import Thread
+
+# Добавьте В САМОМ НАЧАЛЕ main.py (после импортов)
+from flask import Flask
+
+# Создаем Flask-приложение
+web_app = Flask('')
+
+@web_app.route('/')
+def home():
+    return "✅ Литературный бот работает! /start для начала"
+
+def run_web():
+    """Запускает веб-сервер на порту 8080"""
+    web_app.run(host='0.0.0.0', port=8080, debug=False)
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
@@ -674,6 +689,12 @@ async def handle_message(message: Message):
 async def main():
     """Запуск бота"""
     try:
+        # В самое начало функции main() перед await bot.delete_webhook():
+        # Запускаем веб-сервер в отдельном потоке
+        web_thread = Thread(target=run_web, daemon=True)
+        web_thread.start()
+        logging.info("🌐 Веб-сервер запущен на порту 8080")
+        
         # Создаем бот и диспетчер
         bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         dp = Dispatcher()
@@ -684,6 +705,7 @@ async def main():
         print("🚀 ЗАПУСК ЛИТЕРАТУРНОГО БОТА")
         print("=" * 60)
         print(f"🤖 Бот: {'✅ Токен загружен' if BOT_TOKEN else '❌ Токен не найден'}")
+        print(f"🌐 Веб-сервер: ✅ Запущен на порту 8080")
         print(f"💭 Система ответов: ✅ Активна (база знаний + GigaChat)")
         print(f"💾 База данных: ✅ Готова")
         print(f"📚 База знаний: ✅ Загружена ({len(AUTHORS)} авторов)")
