@@ -87,7 +87,7 @@ WRITERS_KNOWLEDGE = {
         },
         "facts": [
             "Владел 13 иностранными языками",
-            "Участвовал в 29 дуэлях (последняя стала смертельной)",
+            "Участвовал в 29 дуэлей (последняя стала смертельной)",
             "Рост - 167 см",
             "Писал левой рукой",
             "Прадед по матери - Абрам Петрович Ганнибал, 'арап Петра Великого'"
@@ -285,6 +285,181 @@ WRITERS_KNOWLEDGE = {
             "Рост - 178 см",
             "Похоронен в Ясной Поляне, на краю оврага, без креста"
         ]
+    },
+    
+    "gogol": {
+        "full_name": "Николай Васильевич Гоголь",
+        "birth": {
+            "date": "20 марта (1 апреля) 1809",
+            "place": "Великие Сорочинцы, Полтавская губерния",
+            "family": "Василий Афанасьевич Гоголь-Яновский (отец), Мария Ивановна Косяровская (мать)"
+        },
+        "death": {
+            "date": "21 февраля (4 марта) 1852",
+            "place": "Москва, дом Талызина на Никитском бульваре",
+            "cause": "Голодание, истощение"
+        },
+        "education": [
+            {
+                "period": "1821-1828",
+                "institution": "Нежинская гимназия высших наук",
+                "location": "Нежин, Черниговская губерния",
+                "details": "Учился вместе с будущими писателями Н. Прокоповичем, А. Данилевским"
+            }
+        ],
+        "key_works": [
+            {
+                "title": "Мёртвые души",
+                "type": "Поэма в прозе",
+                "years": "1842 (том 1)",
+                "description": "Сатира на русское чиновничество и помещичий быт"
+            },
+            {
+                "title": "Ревизор",
+                "type": "Комедия",
+                "years": "1836",
+                "description": "Сатирическая пьеса о взяточничестве и чиновничьем произволе"
+            },
+            {
+                "title": "Вечера на хуторе близ Диканьки",
+                "type": "Сборник повестей",
+                "years": "1831-1832",
+                "description": "Украинский фольклор с элементами мистики"
+            },
+            {
+                "title": "Шинель",
+                "type": "Повесть",
+                "years": "1842",
+                "description": "История 'маленького человека' Акакия Акакиевича Башмачкина"
+            },
+            {
+                "title": "Тарас Бульба",
+                "type": "Повесть",
+                "years": "1835 (первая редакция), 1842 (вторая редакция)",
+                "description": "Историческая повесть о запорожских казаках"
+            }
+        ],
+        "important_events": [
+            {"year": "1828", "event": "Переезд в Петербург", "details": "Начинает литературную карьеру"},
+            {"year": "1836", "event": "Премьера 'Ревизора'", "details": "В Александринском театре, личное присутствие Николая I"},
+            {"year": "1836-1848", "event": "Жизнь за границей", "details": "Рим, Париж, Германия, Швейцария"},
+            {"year": "1842", "event": "Публикация 'Мёртвых душ' (том 1)", "details": "Большой успех"},
+            {"year": "1845", "event": "Сожжение второго тома 'Мёртвых душ'", "details": "Первая попытка"},
+            {"year": "1852", "event": "Окончательное сожжение рукописи", "details": "За 10 дней до смерти"}
+        ],
+        "places": {
+            "born": "Великие Сорочинцы (Украина)",
+            "lived": ["Нежин", "Санкт-Петербург", "Рим", "Москва"],
+            "favorite": "Рим (прожил там около 12 лет)",
+            "died": "Москва"
+        },
+        "facts": [
+            "Боялся быть похороненным заживо (тафефобия)",
+            "Писал стоя за конторкой",
+            "Страдал депрессией и религиозным экстазом",
+            "Был преподавателем истории в Патриотическом институте",
+            "Никогда не был женат"
+        ]
+    },
+    
+    "chekhov": {
+        "full_name": "Антон Павлович Чехов",
+        "birth": {
+            "date": "17 (29) января 1860",
+            "place": "Таганрог, Екатерининская улица",
+            "family": "Павел Егорович Чехов (отец, купец), Евгения Яковлевна Морозова (мать)"
+        },
+        "death": {
+            "date": "2 (15) июля 1904",
+            "place": "Баденвайлер, Германия",
+            "cause": "Туберкулёз лёгких (чахотка)"
+        },
+        "education": [
+            {
+                "period": "1879-1884",
+                "institution": "Московский университет, медицинский факультет",
+                "location": "Москва",
+                "details": "Получил диплом врача, занимался медицинской практикой"
+            }
+        ],
+        "family": {
+            "partner": {
+                "name": "Ольга Леонардовна Книппер",
+                "relationship": "С 1901 года",
+                "details": "Актриса Московского художественного театра, играла в его пьесах"
+            },
+            "siblings": [
+                {"name": "Александр", "details": "Писатель, журналист"},
+                {"name": "Николай", "details": "Художник"},
+                {"name": "Михаил", "details": "Писатель"},
+                {"name": "Мария", "details": "Художница, педагог"}
+            ]
+        },
+        "key_works": [
+            {
+                "title": "Вишнёвый сад",
+                "type": "Пьеса",
+                "years": "1904",
+                "description": "Прощание с уходящей эпохой дворянской России"
+            },
+            {
+                "title": "Три сестры",
+                "type": "Пьеса",
+                "years": "1901",
+                "description": "О мечтах и реальности провинциальной жизни"
+            },
+            {
+                "title": "Чайка",
+                "type": "Пьеса",
+                "years": "1896",
+                "description": "О творчестве, любви и смысле жизни"
+            },
+            {
+                "title": "Дядя Ваня",
+                "type": "Пьеса",
+                "years": "1897",
+                "description": "Переработка более ранней пьесы 'Леший'"
+            },
+            {
+                "title": "Палата №6",
+                "type": "Повесть",
+                "years": "1892",
+                "description": "Критика общественного равнодушия и психиатрической системы"
+            },
+            {
+                "title": "Дама с собачкой",
+                "type": "Рассказ",
+                "years": "1899",
+                "description": "История любви в Ялте"
+            }
+        ],
+        "medical_activity": [
+            "Работал земским врачом в Воскресенске и Звенигороде",
+            "Лечил больных бесплатно во время эпидемии холеры (1892-1893)",
+            "Открыл медицинский пункт в Мелихове",
+            "Строил школы и больницы для крестьян"
+        ],
+        "important_events": [
+            {"year": "1890", "event": "Поездка на Сахалин", "details": "Изучал жизнь каторжников, написал книгу 'Остров Сахалин'"},
+            {"year": "1892", "event": "Переезд в Мелихово", "details": "Подмосковное имение, прожил 7 лет"},
+            {"year": "1898", "event": "Переезд в Ялту", "details": "Из-за обострения туберкулёза"},
+            {"year": "1901", "event": "Женитьба на Ольге Книппер", "details": "Венчание в Москве"},
+            {"year": "1904", "event": "Последняя поездка в Германию", "details": "Для лечения в Баденвайлере"}
+        ],
+        "places": {
+            "born": "Таганрог",
+            "lived": ["Москва", "Мелихово", "Ялта"],
+            "traveled": ["Сахалин", "Европа (Италия, Франция, Германия)"],
+            "died": "Баденвайлер, Германия",
+            "buried": "Новодевичье кладбище, Москва"
+        },
+        "facts": [
+            "Посадил более 1000 деревьев в Таганроге и Ялте",
+            "Собирал средства для голодающих",
+            "Принцип: 'Краткость — сестра таланта'",
+            "Вёл обширную переписку (сохранилось около 4000 писем)",
+            "Считал медицину своей женой, а литературу — любовницей"
+        ]
     }
 }
 
@@ -302,34 +477,57 @@ def search_in_knowledge(author_key: str, query: str) -> str:
     response_parts = []
     
     # Поиск по образованию
-    if any(word in query_lower for word in ["учился", "образован", "учеба", "школ", "лицей", "универ"]):
+    if any(word in query_lower for word in ["учился", "образован", "учеба", "школ", "лицей", "универ", "где учился"]):
         if "education" in knowledge:
             for edu in knowledge["education"]:
-                response_parts.append(f"Учился: {edu['institution']} ({edu['period']}) - {edu.get('details', '')}")
+                response_parts.append(f"• Учился: {edu['institution']} ({edu['period']})")
+                if 'details' in edu:
+                    response_parts.append(f"  {edu['details']}")
+        else:
+            response_parts.append("• Информация об образовании не найдена")
     
-    # Поиск по месту жительства
-    elif any(word in query_lower for word in ["жил", "родился", "где жил", "место"]):
+    # Поиск по месту жительства/рождения
+    elif any(word in query_lower for word in ["жил", "родился", "где жил", "место", "где родился"]):
         if "birth" in knowledge:
-            response_parts.append(f"Родился: {knowledge['birth']['date']} в {knowledge['birth']['place']}")
+            response_parts.append(f"• Родился: {knowledge['birth']['date']} в {knowledge['birth']['place']}")
         if "places" in knowledge:
-            response_parts.append(f"Жил в: {', '.join(knowledge['places'].get('lived', []))}")
+            if 'lived' in knowledge['places']:
+                response_parts.append(f"• Жил в: {', '.join(knowledge['places']['lived'])}")
     
     # Поиск по произведениям
-    elif any(word in query_lower for word in ["книг", "писал", "произведение", "роман"]):
+    elif any(word in query_lower for word in ["книг", "писал", "произведение", "роман", "что написал", "творчеств"]):
         if "key_works" in knowledge:
-            response_parts.append("Основные произведения:")
-            for work in knowledge["key_works"][:3]:
-                response_parts.append(f"• {work['title']} ({work['years']}) - {work['type']}")
+            response_parts.append("• Основные произведения:")
+            for work in knowledge["key_works"][:5]:
+                response_parts.append(f"  - {work['title']} ({work['years']}) — {work['type']}")
     
     # Поиск по семье
-    elif any(word in query_lower for word in ["семья", "жена", "дети"]):
+    elif any(word in query_lower for word in ["семья", "жена", "дети", "родители", "брат", "сестра"]):
         if "family" in knowledge:
             if "wife" in knowledge["family"]:
                 wife = knowledge["family"]["wife"]
-                response_parts.append(f"Жена: {wife.get('name', '')} (с {wife.get('marriage_date', '')})")
+                response_parts.append(f"• Жена: {wife.get('name', '')} (с {wife.get('marriage_date', '')})")
+            elif "partner" in knowledge["family"]:
+                partner = knowledge["family"]["partner"]
+                response_parts.append(f"• Спутница жизни: {partner.get('name', '')} (с {partner.get('relationship', '')})")
+            
             if "children" in knowledge["family"]:
                 children_count = len(knowledge["family"]["children"])
-                response_parts.append(f"Дети: {children_count} детей")
+                response_parts.append(f"• Дети: {children_count} детей")
+    
+    # Поиск по дате смерти
+    elif any(word in query_lower for word in ["умер", "смерть", "когда умер", "причина смерти"]):
+        if "death" in knowledge:
+            response_parts.append(f"• Умер: {knowledge['death']['date']}")
+            response_parts.append(f"• Место: {knowledge['death']['place']}")
+            response_parts.append(f"• Причина: {knowledge['death']['cause']}")
+    
+    # Общие факты
+    elif any(word in query_lower for word in ["факт", "интересн", "знаете ли вы"]):
+        if "facts" in knowledge:
+            response_parts.append("• Интересные факты:")
+            for fact in knowledge["facts"][:3]:
+                response_parts.append(f"  - {fact}")
     
     return "\n".join(response_parts) if response_parts else ""
 [file content end]
