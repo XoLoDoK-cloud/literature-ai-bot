@@ -1,5 +1,3 @@
-[file name]: services/knowledge_base.py
-[file content begin]
 """
 База знаний о русских писателях
 Содержит детальную информацию для точных ответов
