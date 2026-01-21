@@ -1,5 +1,3 @@
-[file name]: services/gigachat_client.py
-[file content begin]
 import asyncio
 import logging
 import random
