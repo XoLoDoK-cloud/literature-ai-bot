@@ -6,11 +6,11 @@ import sys
 import os
 from datetime import datetime
 
-from alogram import Bot, Dispatcher, Router, F
-from alogram.client.default import DefaultBotProperties
-from alogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from alogram.filters import CommandStart, Command
-from alogram.enums import ParseMode
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandStart, Command
+from aiogram.enums import ParseMode
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения
