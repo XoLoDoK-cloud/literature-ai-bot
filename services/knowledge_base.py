@@ -528,4 +528,3 @@ def search_in_knowledge(author_key: str, query: str) -> str:
                 response_parts.append(f"  - {fact}")
     
     return "\n".join(response_parts) if response_parts else ""
-[file content end]
