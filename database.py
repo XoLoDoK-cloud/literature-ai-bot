@@ -83,7 +83,6 @@ class Database:
 
             await conn.commit()
 
-        # миграция из legacy JSON (если есть)
         await self._migrate_legacy_json()
 
     async def ensure_user(self, user_id: int) -> None:
@@ -139,7 +138,6 @@ class Database:
                 (user_id, author_key, role, content, ts),
             )
 
-            # stats
             if role == "user":
                 await conn.execute(
                     "UPDATE stats SET total_user_messages = total_user_messages + 1, updated_at=? WHERE user_id=?",
@@ -164,10 +162,6 @@ class Database:
             await conn.commit()
 
     async def get_conversation_history(self, user_id: int, limit_pairs: int = 4) -> list[dict]:
-        """
-        Вернёт последние limit_pairs*2 сообщений (user/assistant) в формате:
-        [{"role":"user","content":"..."}, ...]
-        """
         await self.ensure_user(user_id)
         limit = max(2, limit_pairs * 2)
         async with aiosqlite.connect(self.db_path) as conn:
@@ -177,7 +171,6 @@ class Database:
             )
             rows = await cur.fetchall()
 
-        # Разворачиваем в хронологическом порядке
         rows.reverse()
         return [{"role": r[0], "content": r[1]} for r in rows]
 
@@ -217,23 +210,36 @@ class Database:
 
     @staticmethod
     def _make_cache_key(author_key: str, system_prompt: str, knowledge_hint: str, user_text: str) -> str:
-        # Стабильный ключ: автор + хэш всего контекста + вопрос
         blob = f"{author_key}\n{system_prompt}\n{knowledge_hint}\n{user_text.strip()}"
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     async def cache_get(self, cache_key: str) -> Optional[str]:
         now = _now_ts()
         async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute("""
-                SELECT response FROM response_cache
-                WHERE cache_key=? AND expires_at > ?
-            """, (cache_key, now))
+            cur = await conn.execute(
+                "SELECT response, expires_at FROM response_cache WHERE cache_key=?",
+                (cache_key,),
+            )
             row = await cur.fetchone()
-            return row[0] if row else None
+            if not row:
+                return None
+            response, expires_at = row
+            if expires_at <= now:
+                await conn.execute("DELETE FROM response_cache WHERE cache_key=?", (cache_key,))
+                await conn.commit()
+                return None
+            return response
 
-    async def cache_set(self, cache_key: str, author_key: str, user_text_hash: str, response: str, ttl_seconds: int = 3600) -> None:
+    async def cache_set(
+        self,
+        cache_key: str,
+        author_key: str,
+        user_text_hash: str,
+        response: str,
+        ttl_seconds: int = 3600,
+    ) -> None:
         now = _now_ts()
-        exp = now + max(60, ttl_seconds)
+        expires_at = now + max(30, int(ttl_seconds))
         async with aiosqlite.connect(self.db_path) as conn:
             await conn.execute("""
                 INSERT INTO response_cache(cache_key, author_key, user_text_hash, response, created_at, expires_at)
@@ -242,7 +248,7 @@ class Database:
                     response=excluded.response,
                     created_at=excluded.created_at,
                     expires_at=excluded.expires_at
-            """, (cache_key, author_key, user_text_hash, response, now, exp))
+            """, (cache_key, author_key, user_text_hash, response, now, expires_at))
             await conn.commit()
 
     async def cache_cleanup(self) -> None:
@@ -251,50 +257,39 @@ class Database:
             await conn.execute("DELETE FROM response_cache WHERE expires_at <= ?", (now,))
             await conn.commit()
 
-    # ---------------- MIGRATION ----------------
-
     async def _migrate_legacy_json(self) -> None:
-        """
-        Миграция из старых data/user_*.json (если такие файлы есть).
-        Делается один раз: если обнаружит JSON — перенесёт и переименует в .migrated
-        """
+        # перенос старых data/*.json если они были
         if not os.path.isdir(self.legacy_dir):
             return
-
-        candidates = [
-            f for f in os.listdir(self.legacy_dir)
-            if f.startswith("user_") and f.endswith(".json")
-        ]
-        if not candidates:
-            return
-
-        for fname in candidates:
+        for fname in os.listdir(self.legacy_dir):
+            if not fname.endswith(".json"):
+                continue
             path = os.path.join(self.legacy_dir, fname)
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                    payload = json.load(f)
             except Exception:
                 continue
 
-            user_id = int(data.get("user_id") or fname.replace("user_", "").replace(".json", ""))
-            selected_author = data.get("selected_author")
-            history = data.get("conversation_history", [])
+            try:
+                user_id = int(os.path.splitext(fname)[0])
+            except Exception:
+                continue
 
             await self.ensure_user(user_id)
-            if selected_author:
-                await self.set_selected_author(user_id, selected_author)
 
-            # перенесём историю
-            # ожидаем формат: [{"role":"user","content":...}, {"role":"assistant"...}]
+            sel = payload.get("selected_author")
+            if sel:
+                await self.set_selected_author(user_id, sel)
+
+            history = payload.get("conversation_history") or []
             for msg in history:
                 role = msg.get("role")
-                content = msg.get("content")
+                content = msg.get("content", "")
                 if role in ("user", "assistant") and content:
-                    # author_key берём выбранного автора или placeholder
-                    author_key = selected_author or "pushkin"
+                    author_key = sel or "pushkin"
                     await self.add_message(user_id, author_key, role, content)
 
-            # помечаем файл как перенесённый
             try:
                 os.rename(path, path + ".migrated")
             except Exception:
