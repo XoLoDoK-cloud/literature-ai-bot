@@ -32,7 +32,8 @@ def home():
 
 def run_web():
     """Запускает веб-сервер на порту 8080"""
-    web_app.run(host='0.0.0.0', port=8080, debug=False)
+    from waitress import serve
+    serve(web_app, host='0.0.0.0', port=8080)
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
@@ -171,6 +172,8 @@ def format_no_author(user_name: str) -> str:
 async def cmd_start(message: Message):
     """Обработчик команды /start"""
     try:
+        if not message.from_user:
+            return
         user_id = message.from_user.id
         user_name = message.from_user.first_name
         
@@ -287,6 +290,8 @@ async def cmd_stats(message: Message):
     """Статистика пользователя"""
     from services.statistics import stats_service
     
+    if not message.from_user:
+        return
     user_id = message.from_user.id
     user_name = message.from_user.first_name
     
@@ -299,6 +304,8 @@ async def cmd_stats(message: Message):
 async def author_selected_callback(callback: CallbackQuery):
     """Выбор конкретного автора"""
     try:
+        if not callback.data:
+            return
         author_key = callback.data.split("_")[1]
         
         if author_key not in AUTHORS:
@@ -306,6 +313,8 @@ async def author_selected_callback(callback: CallbackQuery):
             return
         
         author = AUTHORS[author_key]
+        if not callback.from_user:
+            return
         user_id = callback.from_user.id
         user_name = callback.from_user.first_name
         
@@ -314,7 +323,8 @@ async def author_selected_callback(callback: CallbackQuery):
         user_data["selected_author"] = author_key
         db.save_user_data(user_id, user_data)
         
-        await callback.message.edit_text(
+        if callback.message and isinstance(callback.message, Message):
+            await callback.message.edit_text(
             f"""
 <code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>
 
@@ -378,7 +388,8 @@ async def about_callback(callback: CallbackQuery):
 <code>🎨 Разработано с любовью к литературе</code>
 <code>📚 Приятного общения с классиками!</code>
 """
-    await callback.message.answer(about_text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.answer(about_text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
     await callback.answer("ℹ️ О боте")
 
 @router.callback_query(F.data == "main_menu")
@@ -417,11 +428,12 @@ async def select_author_callback(callback: CallbackQuery):
 <code>🎭 Выберите автора для начала диалога!</code>
 """
     
-    await callback.message.edit_text(
-        select_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
-    )
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            select_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_authors_keyboard()
+        )
     await callback.answer("👥 Выбор автора")
 
 @router.callback_query(F.data == "change_author")
@@ -458,11 +470,12 @@ async def reset_chat_callback(callback: CallbackQuery):
 <code>💡 Совет: Попробуйте нового автора!</code>
 """
     
-    await callback.message.edit_text(
-        reset_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
-    )
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            reset_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_authors_keyboard()
+        )
     await callback.answer("🔄 Диалог сброшен")
 
 @router.callback_query(F.data == "about_author")
@@ -546,8 +559,9 @@ async def about_author_callback(callback: CallbackQuery):
     # Добавляем таймлайн
     timeline_text = timeline_service.get_author_timeline(author_key)
     
-    await callback.message.answer(author_info, parse_mode=ParseMode.HTML)
-    await callback.message.answer(timeline_text, parse_mode=ParseMode.HTML)
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.answer(author_info, parse_mode=ParseMode.HTML)
+        await callback.message.answer(timeline_text, parse_mode=ParseMode.HTML)
     await callback.answer(f"📖 {author['name'].split()[0]}")
 
 @router.callback_query(F.data == "list_authors")
@@ -573,6 +587,8 @@ async def all_authors_callback(callback: CallbackQuery):
 async def handle_message(message: Message):
     """Обработка всех текстовых сообщений"""
     try:
+        if not message.from_user:
+            return
         user_id = message.from_user.id
         user_name = message.from_user.first_name
         user_data = db.get_user_data(user_id)
@@ -588,8 +604,10 @@ async def handle_message(message: Message):
         author_key = user_data["selected_author"]
         author = AUTHORS.get(author_key, AUTHORS["pushkin"])
         
+        user_text = message.text or ""
+        
         # 1. Сначала проверяем, есть ли точный ответ в базе знаний
-        knowledge_answer = search_in_knowledge(author_key, message.text)
+        knowledge_answer = search_in_knowledge(author_key, user_text)
         
         if knowledge_answer:
             # Отправляем точный ответ из базы знаний
@@ -615,7 +633,7 @@ async def handle_message(message: Message):
             db.update_conversation(
                 user_id=user_id,
                 author_key=author_key,
-                user_message=message.text,
+                user_message=user_text,
                 bot_response=knowledge_answer
             )
             
@@ -634,7 +652,7 @@ async def handle_message(message: Message):
             response = await gigachat_client.generate_response(
                 author_key=author_key,
                 author_name=author['name'],
-                user_message=message.text,
+                user_message=user_text,
                 conversation_history=user_data.get("conversation_history", []),
                 gigachad_mode=(author_key == "gigachad")
             )
@@ -671,7 +689,7 @@ async def handle_message(message: Message):
         db.update_conversation(
             user_id=user_id,
             author_key=author_key,
-            user_message=message.text,
+            user_message=user_text,
             bot_response=response
         )
         
