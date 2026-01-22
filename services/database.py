@@ -125,4 +125,180 @@ class Database:
         async with aiosqlite.connect(self.db_path) as conn:
             await conn.execute("DELETE FROM messages WHERE user_id=?", (user_id,))
             await conn.execute(
-                "UPDATE stats SET total_dialog_resets =
+                "UPDATE stats SET total_dialog_resets = total_dialog_resets + 1, updated_at=? WHERE user_id=?",
+                (_now_ts(), user_id),
+            )
+            await conn.commit()
+
+    async def add_message(self, user_id: int, author_key: str, role: str, content: str) -> None:
+        await self.ensure_user(user_id)
+        ts = _now_ts()
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute(
+                "INSERT INTO messages(user_id, author_key, role, content, ts) VALUES(?,?,?,?,?)",
+                (user_id, author_key, role, content, ts),
+            )
+
+            # stats
+            if role == "user":
+                await conn.execute(
+                    "UPDATE stats SET total_user_messages = total_user_messages + 1, updated_at=? WHERE user_id=?",
+                    (ts, user_id),
+                )
+                await conn.execute("""
+                    INSERT INTO author_usage(user_id, author_key, user_messages, assistant_messages)
+                    VALUES(?,?,1,0)
+                    ON CONFLICT(user_id, author_key) DO UPDATE SET user_messages = user_messages + 1
+                """, (user_id, author_key))
+            else:
+                await conn.execute(
+                    "UPDATE stats SET total_assistant_messages = total_assistant_messages + 1, updated_at=? WHERE user_id=?",
+                    (ts, user_id),
+                )
+                await conn.execute("""
+                    INSERT INTO author_usage(user_id, author_key, user_messages, assistant_messages)
+                    VALUES(?,?,0,1)
+                    ON CONFLICT(user_id, author_key) DO UPDATE SET assistant_messages = assistant_messages + 1
+                """, (user_id, author_key))
+
+            await conn.commit()
+
+    async def get_conversation_history(self, user_id: int, limit_pairs: int = 4) -> list[dict]:
+        """
+        Вернёт последние limit_pairs*2 сообщений (user/assistant) в формате:
+        [{"role":"user","content":"..."}, ...]
+        """
+        await self.ensure_user(user_id)
+        limit = max(2, limit_pairs * 2)
+        async with aiosqlite.connect(self.db_path) as conn:
+            cur = await conn.execute(
+                "SELECT role, content FROM messages WHERE user_id=? ORDER BY ts DESC, id DESC LIMIT ?",
+                (user_id, limit),
+            )
+            rows = await cur.fetchall()
+
+        # Разворачиваем в хронологическом порядке
+        rows.reverse()
+        return [{"role": r[0], "content": r[1]} for r in rows]
+
+    async def get_stats(self, user_id: int) -> dict[str, Any]:
+        await self.ensure_user(user_id)
+        async with aiosqlite.connect(self.db_path) as conn:
+            cur = await conn.execute("""
+                SELECT total_user_messages, total_assistant_messages, total_dialog_resets
+                FROM stats WHERE user_id=?
+            """, (user_id,))
+            row = await cur.fetchone()
+
+            cur2 = await conn.execute("""
+                SELECT author_key, (user_messages + assistant_messages) AS total
+                FROM author_usage WHERE user_id=?
+                ORDER BY total DESC
+                LIMIT 1
+            """, (user_id,))
+            fav = await cur2.fetchone()
+
+            cur3 = await conn.execute("SELECT selected_author FROM users WHERE user_id=?", (user_id,))
+            last = await cur3.fetchone()
+
+        return {
+            "total_user_messages": row[0] if row else 0,
+            "total_assistant_messages": row[1] if row else 0,
+            "total_dialog_resets": row[2] if row else 0,
+            "favorite_author": fav[0] if fav else None,
+            "selected_author": last[0] if last and last[0] else None,
+        }
+
+    # ---------------- CACHE ----------------
+
+    @staticmethod
+    def _hash_text(text: str) -> str:
+        return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _make_cache_key(author_key: str, system_prompt: str, knowledge_hint: str, user_text: str) -> str:
+        # Стабильный ключ: автор + хэш всего контекста + вопрос
+        blob = f"{author_key}\n{system_prompt}\n{knowledge_hint}\n{user_text.strip()}"
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    async def cache_get(self, cache_key: str) -> Optional[str]:
+        now = _now_ts()
+        async with aiosqlite.connect(self.db_path) as conn:
+            cur = await conn.execute("""
+                SELECT response FROM response_cache
+                WHERE cache_key=? AND expires_at > ?
+            """, (cache_key, now))
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+    async def cache_set(self, cache_key: str, author_key: str, user_text_hash: str, response: str, ttl_seconds: int = 3600) -> None:
+        now = _now_ts()
+        exp = now + max(60, ttl_seconds)
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO response_cache(cache_key, author_key, user_text_hash, response, created_at, expires_at)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    response=excluded.response,
+                    created_at=excluded.created_at,
+                    expires_at=excluded.expires_at
+            """, (cache_key, author_key, user_text_hash, response, now, exp))
+            await conn.commit()
+
+    async def cache_cleanup(self) -> None:
+        now = _now_ts()
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("DELETE FROM response_cache WHERE expires_at <= ?", (now,))
+            await conn.commit()
+
+    # ---------------- MIGRATION ----------------
+
+    async def _migrate_legacy_json(self) -> None:
+        """
+        Миграция из старых data/user_*.json (если такие файлы есть).
+        Делается один раз: если обнаружит JSON — перенесёт и переименует в .migrated
+        """
+        if not os.path.isdir(self.legacy_dir):
+            return
+
+        candidates = [
+            f for f in os.listdir(self.legacy_dir)
+            if f.startswith("user_") and f.endswith(".json")
+        ]
+        if not candidates:
+            return
+
+        for fname in candidates:
+            path = os.path.join(self.legacy_dir, fname)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+
+            user_id = int(data.get("user_id") or fname.replace("user_", "").replace(".json", ""))
+            selected_author = data.get("selected_author")
+            history = data.get("conversation_history", [])
+
+            await self.ensure_user(user_id)
+            if selected_author:
+                await self.set_selected_author(user_id, selected_author)
+
+            # перенесём историю
+            # ожидаем формат: [{"role":"user","content":...}, {"role":"assistant"...}]
+            for msg in history:
+                role = msg.get("role")
+                content = msg.get("content")
+                if role in ("user", "assistant") and content:
+                    # author_key берём выбранного автора или placeholder
+                    author_key = selected_author or "pushkin"
+                    await self.add_message(user_id, author_key, role, content)
+
+            # помечаем файл как перенесённый
+            try:
+                os.rename(path, path + ".migrated")
+            except Exception:
+                pass
+
+
+db = Database()
