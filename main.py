@@ -257,7 +257,7 @@ async def main():
     print(f"🧠 ИИ: {'✅ GigaChat доступен' if getattr(gigachat_client, 'client', None) else '❌ GigaChat недоступен'}")
     print("=" * 50)
 
-    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
 
