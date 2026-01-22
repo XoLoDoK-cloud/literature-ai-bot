@@ -1,530 +1,156 @@
+# knowledge_base.py
 """
-База знаний о русских писателях
-Содержит детальную информацию для точных ответов
+База знаний + RAG (поиск релевантных пасажей).
+Без внешних библиотек: делаем BM25-подобный скоринг.
 """
 
-WRITERS_KNOWLEDGE = {
-    "pushkin": {
-        "full_name": "Александр Сергеевич Пушкин",
-        "birth": {
-            "date": "26 мая (6 июня) 1799",
-            "place": "Москва, Немецкая улица",
-            "family": "Сергей Львович Пушкин (отец), Надежда Осиповна Ганнибал (мать)"
-        },
-        "death": {
-            "date": "29 января (10 февраля) 1837",
-            "place": "Санкт-Петербург, набережная реки Мойки, 12",
-            "cause": "Ранение на дуэли с Жоржем Дантесом"
-        },
-        "education": [
-            {
-                "period": "1811-1817",
-                "institution": "Царскосельский лицей",
-                "location": "Царское Село (ныне Пушкин, Ленинградская область)",
-                "details": "Привилегированное учебное заведение для дворянских детей. Выпускник первого набора."
-            }
-        ],
-        "family": {
-            "wife": {
-                "name": "Наталья Николаевна Гончарова",
-                "marriage_date": "18 февраля 1831",
-                "details": "Поженились в Москве в церкви Большого Вознесения у Никитских ворот"
-            },
-            "children": [
-                {"name": "Мария", "birth": "1832", "details": "Фрейлина, прожила 86 лет"},
-                {"name": "Александр", "birth": "1833", "details": "Генерал, участник русско-турецкой войны"},
-                {"name": "Григорий", "birth": "1835", "details": "Управляющий имением Михайловское"},
-                {"name": "Наталья", "birth": "1836", "details": "Вышла замуж за принца Нассауского"}
-            ]
-        },
-        "key_works": [
-            {
-                "title": "Евгений Онегин",
-                "type": "Роман в стихах",
-                "years": "1823-1831",
-                "description": "Вершина творчества, первый русский реалистический роман"
-            },
-            {
-                "title": "Капитанская дочка",
-                "type": "Исторический роман",
-                "years": "1836",
-                "description": "Действие происходит во время восстания Пугачёва"
-            },
-            {
-                "title": "Борис Годунов",
-                "type": "Драма",
-                "years": "1825",
-                "description": "Историческая пьеса о Смутном времени"
-            },
-            {
-                "title": "Медный всадник",
-                "type": "Поэма",
-                "years": "1833",
-                "description": "О Петре I и наводнении в Петербурге"
-            },
-            {
-                "title": "Пиковая дама",
-                "type": "Повесть",
-                "years": "1834",
-                "description": "История о картах и роковой страсти"
-            }
-        ],
-        "important_events": [
-            {"year": "1820", "event": "Южная ссылка (Кишинёв, Одесса)", "details": "За вольнолюбивые стихи"},
-            {"year": "1824", "event": "Ссылка в Михайловское", "details": "Под надзор отца, 2 года"},
-            {"year": "1826", "event": "Встреча с Николаем I", "details": "Освобождение от ссылки"},
-            {"year": "1830", "event": "Болдинская осень", "details": "Необычайно продуктивный творческий период"},
-            {"year": "1836", "event": "Основание журнала 'Современник'", "details": "Литературный журнал"},
-            {"year": "1837", "event": "Дуэль с Дантесом", "details": "27 января на Чёрной речке, смертельное ранение"}
-        ],
-        "places": {
-            "born": "Москва",
-            "lived": ["Царское Село", "Санкт-Петербург", "Михайловское", "Болдино"],
-            "exile": ["Кишинёв", "Одесса", "Михайловское"],
-            "died": "Санкт-Петербург"
-        },
-        "facts": [
-            "Владел 13 иностранными языками",
-            "Участвовал в 29 дуэлей (последняя стала смертельной)",
-            "Рост - 167 см",
-            "Писал левой рукой",
-            "Прадед по матери - Абрам Петрович Ганнибал, 'арап Петра Великого'"
-        ]
-    },
-    
-    "dostoevsky": {
-        "full_name": "Фёдор Михайлович Достоевский",
-        "birth": {
-            "date": "30 октября (11 ноября) 1821",
-            "place": "Москва, Мариинская больница для бедных",
-            "family": "Михаил Андреевич Достоевский (отец, врач), Мария Фёдоровна Нечаева (мать)"
-        },
-        "death": {
-            "date": "28 января (9 февраля) 1881",
-            "place": "Санкт-Петербург",
-            "cause": "Эмфизема лёгких"
-        },
-        "education": [
-            {
-                "period": "1838-1843",
-                "institution": "Главное инженерное училище",
-                "location": "Санкт-Петербург",
-                "details": "Военно-инженерное образование, выпущен в звании подпоручика"
-            }
-        ],
-        "family": {
-            "first_wife": {
-                "name": "Мария Дмитриевна Исаева",
-                "marriage_date": "1857",
-                "death": "1864",
-                "details": "Вдова чиновника, познакомились в Семипалатинске"
-            },
-            "second_wife": {
-                "name": "Анна Григорьевна Сниткина",
-                "marriage_date": "1867",
-                "details": "Стенографистка, стала верной помощницей и издателем"
-            },
-            "children": [
-                {"name": "Софья", "birth": "1868", "death": "1868", "details": "Умерла в младенчестве"},
-                {"name": "Любовь", "birth": "1869", "details": "Писательница, эмигрировала после революции"},
-                {"name": "Фёдор", "birth": "1871", "details": "Биограф отца"},
-                {"name": "Алексей", "birth": "1875", "death": "1878", "details": "Умер от эпилепсии в 3 года"}
-            ]
-        },
-        "key_works": [
-            {
-                "title": "Преступление и наказание",
-                "type": "Роман",
-                "years": "1866",
-                "description": "Психологический роман о студенте Раскольникове"
-            },
-            {
-                "title": "Идиот",
-                "type": "Роман",
-                "years": "1869",
-                "description": "История князя Мышкина, 'положительно прекрасного человека'"
-            },
-            {
-                "title": "Бесы",
-                "type": "Роман",
-                "years": "1872",
-                "description": "Политический роман о революционерах"
-            },
-            {
-                "title": "Братья Карамазовы",
-                "type": "Роман",
-                "years": "1880",
-                "description": "Последний и самый философский роман"
-            },
-            {
-                "title": "Записки из подполья",
-                "type": "Повесть",
-                "years": "1864",
-                "description": "Монолог 'подпольного человека'"
-            }
-        ],
-        "important_events": [
-            {"year": "1849", "event": "Арест по делу Петрашевского", "details": "За чтение запрещённой литературы"},
-            {"year": "1849", "event": "Инсценировка казни", "details": "22 декабря на Семёновском плацу"},
-            {"year": "1850-1854", "event": "Каторга", "details": "Омский острог, 4 года"},
-            {"year": "1854-1859", "event": "Служба рядовым", "details": "Семипалатинск, восстановлен в правах"},
-            {"year": "1867-1871", "event": "Жизнь за границей", "details": "Путешествие по Европе с женой"},
-            {"year": "1880", "event": "Речь о Пушкине", "details": "На открытии памятника в Москве"}
-        ],
-        "health": [
-            "Страдал эпилепсией с 18 лет",
-            "Приступы случались примерно раз в месяц",
-            "Играл в рулетку, страдал игровой зависимостью"
-        ],
-        "facts": [
-            "Писал роман 'Игрок' за 26 дней под угрозой потери прав на издание",
-            "Диктовал 'Братьев Карамазовых' жене, так как сам уже плохо писал",
-            "Похоронен на Тихвинском кладбище Александро-Невской лавры",
-            "Был азартным игроком, часто проигрывал большие суммы"
-        ]
-    },
-    
-    "tolstoy": {
-        "full_name": "Лев Николаевич Толстой",
-        "birth": {
-            "date": "28 августа (9 сентября) 1828",
-            "place": "Ясная Поляна, Тульская губерния",
-            "family": "Николай Ильич Толстой (отец), Мария Николаевна Волконская (мать)"
-        },
-        "death": {
-            "date": "7 (20) ноября 1910",
-            "place": "Станция Астапово (ныне Лев Толстой), Рязанская губерния",
-            "cause": "Воспаление лёгких"
-        },
-        "education": [
-            {
-                "period": "1844-1847",
-                "institution": "Казанский университет",
-                "details": "Сначала на восточном факультете, потом на юридическом. Не окончил."
-            }
-        ],
-        "family": {
-            "wife": {
-                "name": "Софья Андреевна Берс",
-                "marriage_date": "23 сентября 1862",
-                "details": "Младше на 16 лет, была верной помощницей и переписчицей"
-            },
-            "children": [
-                {"name": "Сергей", "birth": "1863", "details": "Композитор, музыковед"},
-                {"name": "Татьяна", "birth": "1864", "details": "Художница, мемуаристка"},
-                {"name": "Илья", "birth": "1866", "details": "Писатель, журналист"},
-                {"name": "Лев", "birth": "1869", "details": "Писатель, скульптор"},
-                {"name": "Мария", "birth": "1871", "details": "Умерла в детстве"},
-                {"name": "Андрей", "birth": "1877", "details": "Чиновник"},
-                {"name": "Михаил", "birth": "1879", "details": "Музыкант"},
-                {"name": "Алексей", "birth": "1881", "death": "1886", "details": "Умер в детстве"},
-                {"name": "Александра", "birth": "1884", "details": "Личный секретарь отца, врач"},
-                {"name": "Иван", "birth": "1888", "death": "1895", "details": "Умер в детстве"}
-            ],
-            "total_children": "13 детей, 8 дожили до взрослого возраста"
-        },
-        "key_works": [
-            {
-                "title": "Война и мир",
-                "type": "Роман-эпопея",
-                "years": "1863-1869",
-                "volumes": "4 тома",
-                "description": "О войне 1812 года и русском обществе начала XIX века"
-            },
-            {
-                "title": "Анна Каренина",
-                "type": "Роман",
-                "years": "1873-1877",
-                "description": "Трагедия замужней женщины, полюбившей другого"
-            },
-            {
-                "title": "Воскресение",
-                "type": "Роман",
-                "years": "1889-1899",
-                "description": "Последний роман, критикует судебную систему"
-            },
-            {
-                "title": "Севастопольские рассказы",
-                "type": "Рассказы",
-                "years": "1855",
-                "description": "Основаны на личном опыте Крымской войны"
-            },
-            {
-                "title": "Детство. Отрочество. Юность",
-                "type": "Повесть",
-                "years": "1852-1857",
-                "description": "Автобиографическая трилогия"
-            }
-        ],
-        "military_service": [
-            {"period": "1851-1855", "location": "Кавказ, Крым", "rank": "Подпоручик"},
-            {"event": "Участие в обороне Севастополя", "details": "Командовал батареей на 4-м бастионе"}
-        ],
-        "pedagogical_activity": [
-            "Основал школу для крестьянских детей в Ясной Поляне (1859)",
-            "Написал 'Азбуку' (1872) и 'Новую азбуку' (1875)",
-            "Издавал педагогический журнал 'Ясная Поляна'"
-        ],
-        "spiritual_crisis": [
-            {"year": "1880-е", "event": "Отказ от собственности", "details": "Передал имущество семье"},
-            {"year": "1891", "event": "Отказ от авторских прав", "details": "После 1881 года"},
-            {"year": "1901", "event": "Отлучение от церкви", "details": "Синодом Русской православной церкви"}
-        ],
-        "final_days": [
-            {"date": "28 октября 1910", "event": "Уход из дома", "details": "Тайно покинул Ясную Поляну"},
-            {"date": "31 октября", "event": "Отъезд из Оптиной пустыни", "details": "Не стал встречаться со старцами"},
-            {"date": "3 ноября", "event": "Заболел", "details": "Воспаление лёгких в поезде"},
-            {"date": "7 ноября", "event": "Смерть", "details": "На станции Астапово"}
-        ],
-        "facts": [
-            "Вел дневник с 18 лет до самой смерти",
-            "Был вегетарианцем",
-            "Сам шил себе сапоги",
-            "Рост - 178 см",
-            "Похоронен в Ясной Поляне, на краю оврага, без креста"
-        ]
-    },
-    
-    "gogol": {
-        "full_name": "Николай Васильевич Гоголь",
-        "birth": {
-            "date": "20 марта (1 апреля) 1809",
-            "place": "Великие Сорочинцы, Полтавская губерния",
-            "family": "Василий Афанасьевич Гоголь-Яновский (отец), Мария Ивановна Косяровская (мать)"
-        },
-        "death": {
-            "date": "21 февраля (4 марта) 1852",
-            "place": "Москва, дом Талызина на Никитском бульваре",
-            "cause": "Голодание, истощение"
-        },
-        "education": [
-            {
-                "period": "1821-1828",
-                "institution": "Нежинская гимназия высших наук",
-                "location": "Нежин, Черниговская губерния",
-                "details": "Учился вместе с будущими писателями Н. Прокоповичем, А. Данилевским"
-            }
-        ],
-        "key_works": [
-            {
-                "title": "Мёртвые души",
-                "type": "Поэма в прозе",
-                "years": "1842 (том 1)",
-                "description": "Сатира на русское чиновничество и помещичий быт"
-            },
-            {
-                "title": "Ревизор",
-                "type": "Комедия",
-                "years": "1836",
-                "description": "Сатирическая пьеса о взяточничестве и чиновничьем произволе"
-            },
-            {
-                "title": "Вечера на хуторе близ Диканьки",
-                "type": "Сборник повестей",
-                "years": "1831-1832",
-                "description": "Украинский фольклор с элементами мистики"
-            },
-            {
-                "title": "Шинель",
-                "type": "Повесть",
-                "years": "1842",
-                "description": "История 'маленького человека' Акакия Акакиевича Башмачкина"
-            },
-            {
-                "title": "Тарас Бульба",
-                "type": "Повесть",
-                "years": "1835 (первая редакция), 1842 (вторая редакция)",
-                "description": "Историческая повесть о запорожских казаках"
-            }
-        ],
-        "important_events": [
-            {"year": "1828", "event": "Переезд в Петербург", "details": "Начинает литературную карьеру"},
-            {"year": "1836", "event": "Премьера 'Ревизора'", "details": "В Александринском театре, личное присутствие Николая I"},
-            {"year": "1836-1848", "event": "Жизнь за границей", "details": "Рим, Париж, Германия, Швейцария"},
-            {"year": "1842", "event": "Публикация 'Мёртвых душ' (том 1)", "details": "Большой успех"},
-            {"year": "1845", "event": "Сожжение второго тома 'Мёртвых душ'", "details": "Первая попытка"},
-            {"year": "1852", "event": "Окончательное сожжение рукописи", "details": "За 10 дней до смерти"}
-        ],
-        "places": {
-            "born": "Великие Сорочинцы (Украина)",
-            "lived": ["Нежин", "Санкт-Петербург", "Рим", "Москва"],
-            "favorite": "Рим (прожил там около 12 лет)",
-            "died": "Москва"
-        },
-        "facts": [
-            "Боялся быть похороненным заживо (тафефобия)",
-            "Писал стоя за конторкой",
-            "Страдал депрессией и религиозным экстазом",
-            "Был преподавателем истории в Патриотическом институте",
-            "Никогда не был женат"
-        ]
-    },
-    
-    "chekhov": {
-        "full_name": "Антон Павлович Чехов",
-        "birth": {
-            "date": "17 (29) января 1860",
-            "place": "Таганрог, Екатерининская улица",
-            "family": "Павел Егорович Чехов (отец, купец), Евгения Яковлевна Морозова (мать)"
-        },
-        "death": {
-            "date": "2 (15) июля 1904",
-            "place": "Баденвайлер, Германия",
-            "cause": "Туберкулёз лёгких (чахотка)"
-        },
-        "education": [
-            {
-                "period": "1879-1884",
-                "institution": "Московский университет, медицинский факультет",
-                "location": "Москва",
-                "details": "Получил диплом врача, занимался медицинской практикой"
-            }
-        ],
-        "family": {
-            "partner": {
-                "name": "Ольга Леонардовна Книппер",
-                "relationship": "С 1901 года",
-                "details": "Актриса Московского художественного театра, играла в его пьесах"
-            },
-            "siblings": [
-                {"name": "Александр", "details": "Писатель, журналист"},
-                {"name": "Николай", "details": "Художник"},
-                {"name": "Михаил", "details": "Писатель"},
-                {"name": "Мария", "details": "Художница, педагог"}
-            ]
-        },
-        "key_works": [
-            {
-                "title": "Вишнёвый сад",
-                "type": "Пьеса",
-                "years": "1904",
-                "description": "Прощание с уходящей эпохой дворянской России"
-            },
-            {
-                "title": "Три сестры",
-                "type": "Пьеса",
-                "years": "1901",
-                "description": "О мечтах и реальности провинциальной жизни"
-            },
-            {
-                "title": "Чайка",
-                "type": "Пьеса",
-                "years": "1896",
-                "description": "О творчестве, любви и смысле жизни"
-            },
-            {
-                "title": "Дядя Ваня",
-                "type": "Пьеса",
-                "years": "1897",
-                "description": "Переработка более ранней пьесы 'Леший'"
-            },
-            {
-                "title": "Палата №6",
-                "type": "Повесть",
-                "years": "1892",
-                "description": "Критика общественного равнодушия и психиатрической системы"
-            },
-            {
-                "title": "Дама с собачкой",
-                "type": "Рассказ",
-                "years": "1899",
-                "description": "История любви в Ялте"
-            }
-        ],
-        "medical_activity": [
-            "Работал земским врачом в Воскресенске и Звенигороде",
-            "Лечил больных бесплатно во время эпидемии холеры (1892-1893)",
-            "Открыл медицинский пункт в Мелихове",
-            "Строил школы и больницы для крестьян"
-        ],
-        "important_events": [
-            {"year": "1890", "event": "Поездка на Сахалин", "details": "Изучал жизнь каторжников, написал книгу 'Остров Сахалин'"},
-            {"year": "1892", "event": "Переезд в Мелихово", "details": "Подмосковное имение, прожил 7 лет"},
-            {"year": "1898", "event": "Переезд в Ялту", "details": "Из-за обострения туберкулёза"},
-            {"year": "1901", "event": "Женитьба на Ольге Книппер", "details": "Венчание в Москве"},
-            {"year": "1904", "event": "Последняя поездка в Германию", "details": "Для лечения в Баденвайлере"}
-        ],
-        "places": {
-            "born": "Таганрог",
-            "lived": ["Москва", "Мелихово", "Ялта"],
-            "traveled": ["Сахалин", "Европа (Италия, Франция, Германия)"],
-            "died": "Баденвайлер, Германия",
-            "buried": "Новодевичье кладбище, Москва"
-        },
-        "facts": [
-            "Посадил более 1000 деревьев в Таганроге и Ялте",
-            "Собирал средства для голодающих",
-            "Принцип: 'Краткость — сестра таланта'",
-            "Вёл обширную переписку (сохранилось около 4000 писем)",
-            "Считал медицину своей женой, а литературу — любовницей"
-        ]
-    }
+from __future__ import annotations
+import math
+import re
+from typing import Any, Dict, List, Tuple, Optional
+
+# ---- ТВОЯ БАЗА ЗНАНИЙ (оставляем как есть, можно расширять) ----
+# ВСТАВЬ СЮДА СВОЙ WRITERS_KNOWLEDGE, если он у тебя большой.
+# Ниже — примерная структура; у тебя уже есть полный словарь.
+from typing import cast
+
+WRITERS_KNOWLEDGE: Dict[str, Dict[str, Any]] = {
+    # ⚠️ Здесь должен быть твой полный словарь.
+    # Оставь как в твоём текущем файле (из проекта).
 }
 
-def get_writer_knowledge(author_key: str) -> dict:
-    """Получить информацию о писателе по ключу"""
+# ------------------- базовые helper'ы -------------------
+_WORD_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
+
+def _tokenize(text: str) -> List[str]:
+    return _WORD_RE.findall(text.lower())
+
+def get_writer_knowledge(author_key: str) -> Dict[str, Any]:
     return WRITERS_KNOWLEDGE.get(author_key, {})
 
-def search_in_knowledge(author_key: str, query: str) -> str:
-    """Поиск информации в базе знаний по запросу"""
-    knowledge = get_writer_knowledge(author_key)
-    if not knowledge:
-        return ""
-    
-    query_lower = query.lower()
-    response_parts = []
-    
-    # Поиск по образованию
-    if any(word in query_lower for word in ["учился", "образован", "учеба", "школ", "лицей", "универ", "где учился"]):
-        if "education" in knowledge:
-            for edu in knowledge["education"]:
-                response_parts.append(f"• Учился: {edu['institution']} ({edu['period']})")
-                if 'details' in edu:
-                    response_parts.append(f"  {edu['details']}")
-        else:
-            response_parts.append("• Информация об образовании не найдена")
-    
-    # Поиск по месту жительства/рождения
-    elif any(word in query_lower for word in ["жил", "родился", "где жил", "место", "где родился"]):
-        if "birth" in knowledge:
-            response_parts.append(f"• Родился: {knowledge['birth']['date']} в {knowledge['birth']['place']}")
-        if "places" in knowledge:
-            if 'lived' in knowledge['places']:
-                response_parts.append(f"• Жил в: {', '.join(knowledge['places']['lived'])}")
-    
-    # Поиск по произведениям
-    elif any(word in query_lower for word in ["книг", "писал", "произведение", "роман", "что написал", "творчеств"]):
-        if "key_works" in knowledge:
-            response_parts.append("• Основные произведения:")
-            for work in knowledge["key_works"][:5]:
-                response_parts.append(f"  - {work['title']} ({work['years']}) — {work['type']}")
-    
-    # Поиск по семье
-    elif any(word in query_lower for word in ["семья", "жена", "дети", "родители", "брат", "сестра"]):
-        if "family" in knowledge:
-            if "wife" in knowledge["family"]:
-                wife = knowledge["family"]["wife"]
-                response_parts.append(f"• Жена: {wife.get('name', '')} (с {wife.get('marriage_date', '')})")
-            elif "partner" in knowledge["family"]:
-                partner = knowledge["family"]["partner"]
-                response_parts.append(f"• Спутница жизни: {partner.get('name', '')} (с {partner.get('relationship', '')})")
-            
-            if "children" in knowledge["family"]:
-                children_count = len(knowledge["family"]["children"])
-                response_parts.append(f"• Дети: {children_count} детей")
-    
-    # Поиск по дате смерти
-    elif any(word in query_lower for word in ["умер", "смерть", "когда умер", "причина смерти"]):
-        if "death" in knowledge:
-            response_parts.append(f"• Умер: {knowledge['death']['date']}")
-            response_parts.append(f"• Место: {knowledge['death']['place']}")
-            response_parts.append(f"• Причина: {knowledge['death']['cause']}")
-    
-    # Общие факты
-    elif any(word in query_lower for word in ["факт", "интересн", "знаете ли вы"]):
-        if "facts" in knowledge:
-            response_parts.append("• Интересные факты:")
-            for fact in knowledge["facts"][:3]:
-                response_parts.append(f"  - {fact}")
-    
-    return "\n".join(response_parts) if response_parts else ""
+# ------------------- flatten -> passages -------------------
+def _flatten(obj: Any, prefix: str = "") -> List[str]:
+    lines: List[str] = []
+    if obj is None:
+        return lines
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            p = f"{prefix}{k}".strip(".")
+            if isinstance(v, (dict, list)):
+                lines.extend(_flatten(v, prefix=p + "."))
+            else:
+                lines.append(f"{p}: {v}")
+        return lines
+
+    if isinstance(obj, list):
+        for i, v in enumerate(obj):
+            p = f"{prefix}{i}".strip(".")
+            if isinstance(v, (dict, list)):
+                lines.extend(_flatten(v, prefix=p + "."))
+            else:
+                lines.append(f"{prefix.rstrip('.')}: {v}")
+        return lines
+
+    lines.append(f"{prefix.rstrip('.')}: {obj}")
+    return lines
+
+def build_passages(author_key: str, max_lines_per_passage: int = 3) -> List[str]:
+    kb = get_writer_knowledge(author_key)
+    if not kb:
+        return []
+    lines = _flatten(kb)
+    passages: List[str] = []
+    buf: List[str] = []
+    for ln in lines:
+        ln = str(ln).strip()
+        if not ln:
+            continue
+        buf.append(ln)
+        if len(buf) >= max_lines_per_passage:
+            passages.append("\n".join(buf))
+            buf = []
+    if buf:
+        passages.append("\n".join(buf))
+    return passages
+
+# ------------------- BM25-like index per author -------------------
+class _BM25Index:
+    def __init__(self, passages: List[str]):
+        self.passages = passages
+        self.docs = [ _tokenize(p) for p in passages ]
+        self.N = len(self.docs)
+        self.avgdl = (sum(len(d) for d in self.docs) / self.N) if self.N else 0.0
+        self.df: Dict[str, int] = {}
+        for d in self.docs:
+            seen = set(d)
+            for t in seen:
+                self.df[t] = self.df.get(t, 0) + 1
+
+    def idf(self, t: str) -> float:
+        # классическая BM25 idf
+        df = self.df.get(t, 0)
+        if df == 0:
+            return 0.0
+        return math.log(1 + (self.N - df + 0.5) / (df + 0.5))
+
+    def score(self, query_tokens: List[str], k1: float = 1.2, b: float = 0.75) -> List[Tuple[int, float]]:
+        if not self.N:
+            return []
+        q = query_tokens
+        scores: List[Tuple[int, float]] = []
+        for i, d in enumerate(self.docs):
+            dl = len(d) or 1
+            tf: Dict[str, int] = {}
+            for t in d:
+                tf[t] = tf.get(t, 0) + 1
+
+            s = 0.0
+            for t in q:
+                if t not in tf:
+                    continue
+                idf = self.idf(t)
+                freq = tf[t]
+                denom = freq + k1 * (1 - b + b * (dl / (self.avgdl or 1)))
+                s += idf * (freq * (k1 + 1) / denom)
+            if s > 0:
+                scores.append((i, s))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores
+
+_INDEX_CACHE: Dict[str, _BM25Index] = {}
+
+def retrieve_passages(author_key: str, query: str, top_k: int = 4) -> List[str]:
+    passages = build_passages(author_key)
+    if not passages:
+        return []
+    idx = _INDEX_CACHE.get(author_key)
+    if not idx or idx.passages != passages:
+        idx = _BM25Index(passages)
+        _INDEX_CACHE[author_key] = idx
+
+    qt = _tokenize(query)
+    ranked = idx.score(qt)
+    out: List[str] = []
+    for i, _s in ranked[:max(1, top_k)]:
+        out.append(passages[i])
+    return out
+
+# ------------------- “быстрые факты” -------------------
+def is_fact_question(query: str) -> bool:
+    q = query.lower().strip()
+    # грубая эвристика, но работает для биографии/дат/мест
+    fact_markers = [
+        "когда", "в каком", "где", "сколько", "дата", "родился", "родилась",
+        "умер", "умерла", "погиб", "погибла", "место", "год", "век",
+        "кто такой", "что такое", "как зовут", "настоящее имя"
+    ]
+    if "?" in q:
+        return any(m in q for m in fact_markers)
+    # без вопроса — тоже может быть факт
+    return any(m in q for m in fact_markers)
+
+def fact_snippet(author_key: str, query: str) -> str:
+    # для фактов берём более “жёсткий” поиск: топ-2 пасажа
+    passages = retrieve_passages(author_key, query, top_k=2)
+    return "\n\n".join(passages).strip()
