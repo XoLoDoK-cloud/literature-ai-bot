@@ -1,263 +1,329 @@
+# main.py
 import asyncio
 import logging
-import os
+import time
+from typing import Dict, Tuple
+
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message, CallbackQuery
+
 from config import BOT_TOKEN
+from authors import AUTHORS, get_author, list_author_keys
 from database import db
 from gigachat_client import gigachat_client
+from inline_keyboards import (
+    get_main_menu_keyboard,
+    get_authors_keyboard,
+    get_chat_keyboard,
+)
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = Router()
 
-# Данные о писателях (упрощенные)
-AUTHORS = {
-    "pushkin": {"name": "🖋️ Александр Пушкин", "greeting": "Здравствуйте! Рад нашей беседе. Что желаете узнать?"},
-    "dostoevsky": {"name": "📚 Фёдор Достоевский", "greeting": "Здравствуйте. Что тревожит вашу душу?"},
-    "tolstoy": {"name": "✍️ Лев Толстой", "greeting": "Здравствуйте, друг мой. Поговорим о важном?"},
-    "gogol": {"name": "👻 Николай Гоголь", "greeting": "А, вот и вы! Любопытно, что вы хотите узнать?"},
-    "chekhov": {"name": "🏥 Антон Чехов", "greeting": "Здравствуйте. Рассказывайте. Краткость — сестра таланта."},
-    "gigachad": {"name": "💪 ГИГАЧАД", "greeting": "СЛУШАЙ СЮДА! Готов прокачать твой мозг классикой! 🔥"}
-}
+# ---------------- Anti-flood / Rate limit ----------------
+# Простая token-bucket защита на пользователя:
+# capacity=5 токенов, refill=1 токен/сек, cost=1 токен/сообщение
+_RATE: Dict[int, Tuple[float, float]] = {}  # user_id -> (tokens, last_ts)
+RATE_CAPACITY = 5.0
+RATE_REFILL_PER_SEC = 1.0
+RATE_COST = 1.0
 
-def get_authors_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора автора"""
-    buttons = []
-    
-    # Первый ряд: 3 кнопки
-    buttons.append([
-        InlineKeyboardButton(text="🖋️ Пушкин", callback_data="author_pushkin"),
-        InlineKeyboardButton(text="📚 Достоевский", callback_data="author_dostoevsky"),
-        InlineKeyboardButton(text="✍️ Толстой", callback_data="author_tolstoy")
-    ])
-    
-    # Второй ряд: 3 кнопки
-    buttons.append([
-        InlineKeyboardButton(text="👻 Гоголь", callback_data="author_gogol"),
-        InlineKeyboardButton(text="🏥 Чехов", callback_data="author_chekhov"),
-        InlineKeyboardButton(text="💪 ГИГАЧАД", callback_data="author_gigachad")
-    ])
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_chat_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура во время диалога"""
-    keyboard = [
-        [
-            InlineKeyboardButton(text="👥 Сменить автора", callback_data="change_author"),
-            InlineKeyboardButton(text="🔄 Новый диалог", callback_data="reset_chat")
-        ],
-        [
-            InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+def rate_allow(user_id: int) -> bool:
+    now = time.time()
+    tokens, last = _RATE.get(user_id, (RATE_CAPACITY, now))
+    # пополняем
+    tokens = min(RATE_CAPACITY, tokens + (now - last) * RATE_REFILL_PER_SEC)
+    if tokens >= RATE_COST:
+        tokens -= RATE_COST
+        _RATE[user_id] = (tokens, now)
+        return True
+    _RATE[user_id] = (tokens, now)
+    return False
 
-# ========== КОМАНДЫ ==========
+
+# ---------------- Helpers ----------------
+
+def format_author_name(author_key: str) -> str:
+    a = get_author(author_key)
+    return a.get("name", author_key)
+
+
+def pretty_stats_text(stats: dict) -> str:
+    fav = stats.get("favorite_author")
+    selected = stats.get("selected_author")
+
+    fav_text = format_author_name(fav) if fav else "—"
+    selected_text = format_author_name(selected) if selected else "—"
+
+    return (
+        "📊 <b>ВАША СТАТИСТИКА</b>\n\n"
+        f"✉️ Сообщений от вас: <b>{stats.get('total_user_messages', 0)}</b>\n"
+        f"🤖 Ответов бота: <b>{stats.get('total_assistant_messages', 0)}</b>\n"
+        f"🔄 Сбросов диалога: <b>{stats.get('total_dialog_resets', 0)}</b>\n\n"
+        f"⭐ Любимый автор: <b>{fav_text}</b>\n"
+        f"🎭 Текущий автор: <b>{selected_text}</b>\n"
+    )
+
+
+# ---------------- Commands ----------------
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
-    """Запуск бота"""
     user_name = message.from_user.first_name if message.from_user else "Друг"
-    
-    welcome_text = f"""
-✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨
+    await db.ensure_user(message.from_user.id)
 
-👋 <b>Привет, {user_name}!</b>
+    welcome_text = (
+        "✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨\n\n"
+        f"👋 <b>Привет, {user_name}!</b>\n\n"
+        "💬 <b>Выберите писателя и задайте ему любой вопрос.</b>\n\n"
+        "👇 <b>Главное меню:</b>"
+    )
 
-💬 <b>Я могу представить любого русского классика.</b>
-<b>Выберите писателя и задайте ему любой вопрос.</b>
-
-👇 <b>Выберите автора для диалога:</b>
-"""
-    
     await message.answer(
         welcome_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
+        reply_markup=get_main_menu_keyboard(),
     )
+
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    """Помощь"""
-    help_text = """
-📚 <b>ПОМОЩЬ ПО БОТУ</b>
+    help_text = (
+        "📚 <b>ПОМОЩЬ</b>\n\n"
+        "1) Выберите автора\n"
+        "2) Задавайте вопросы\n"
+        "3) Используйте кнопки управления\n\n"
+        "💡 Бот использует ИИ (GigaChat) + базу знаний по писателям.\n"
+        "Если ИИ недоступен — попробует ответить фактами из базы."
+    )
+    await message.answer(help_text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
 
-✨ <b>Как использовать:</b>
-
-1. <b>Выберите автора</b> из списка
-2. <b>Задавайте вопросы</b> о:
-   • Литературе и творчестве
-   • Жизни и философии
-   • Исторических событиях
-   • Любых других темах
-
-3. <b>Управляйте диалогом:</b>
-   • 👥 Сменить автора — выбрать нового писателя
-   • 🔄 Новый диалог — начать разговор заново
-   • 🏠 Главное меню — вернуться к выбору автора
-
-💡 <i>Бот использует ИИ GigaChat и базу знаний о писателях</i>
-"""
-    await message.answer(help_text, parse_mode=ParseMode.HTML)
 
 @router.message(Command("authors"))
 async def cmd_authors(message: Message):
-    """Список авторов"""
     await message.answer(
-        "👥 <b>ВСЕ ПИСАТЕЛИ</b>\n\nВыберите автора для диалога:",
+        "👥 <b>ВЫБЕРИТЕ АВТОРА</b>",
         parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
+        reply_markup=get_authors_keyboard(),
     )
 
-# ========== ВЫБОР АВТОРА ==========
-@router.callback_query(F.data.startswith("author_"))
-async def author_selected(callback: CallbackQuery):
-    """Выбор конкретного автора"""
-    author_key = callback.data.split("_")[1]
-    
-    if author_key not in AUTHORS:
-        await callback.answer("Автор не найден")
-        return
-    
-    author = AUTHORS[author_key]
-    user_id = callback.from_user.id
-    
-    # Сохраняем выбор
-    user_data = db.get_user_data(user_id)
-    user_data["selected_author"] = author_key
-    db.save_user_data(user_id, user_data)
-    
-    # Приветственное сообщение
-    await callback.message.edit_text(
-        f"{author['name']}\n\n💬 {author['greeting']}\n\n<i>Задавайте вопросы — отвечу в своём стиле!</i>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_chat_keyboard()
-    )
-    
-    await callback.answer(f"Выбран: {author['name']}")
 
-# ========== УПРАВЛЕНИЕ ДИАЛОГОМ ==========
-@router.callback_query(F.data == "change_author")
-async def change_author(callback: CallbackQuery):
-    """Смена автора"""
-    await callback.message.edit_text(
-        "👥 <b>ВЫБЕРИТЕ НОВОГО АВТОРА:</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
-    )
-    await callback.answer()
+@router.message(Command("stats"))
+async def cmd_stats(message: Message):
+    stats = await db.get_stats(message.from_user.id)
+    await message.answer(pretty_stats_text(stats), parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
 
-@router.callback_query(F.data == "reset_chat")
-async def reset_chat(callback: CallbackQuery):
-    """Сброс диалога"""
-    user_id = callback.from_user.id
-    user_data = db.get_user_data(user_id)
-    user_data["conversation_history"] = []
-    user_data["selected_author"] = None
-    db.save_user_data(user_id, user_data)
-    
-    await callback.message.edit_text(
-        "🔄 <b>Диалог сброшен!</b>\n\nВыберите нового автора:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
-    )
-    await callback.answer("Диалог сброшен")
+
+# ---------------- Callbacks: menu ----------------
 
 @router.callback_query(F.data == "main_menu")
-async def main_menu(callback: CallbackQuery):
-    """Главное меню"""
+async def cb_main_menu(callback: CallbackQuery):
     await cmd_start(callback.message)
     await callback.answer()
 
-# ========== ОБРАБОТКА СООБЩЕНИЙ ==========
+
+@router.callback_query(F.data == "help")
+async def cb_help(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "📚 <b>ПОМОЩЬ</b>\n\n"
+        "• 🎭 Выбрать автора — начать диалог\n"
+        "• 🔄 Сбросить диалог — очистить историю\n"
+        "• 📊 Статистика — посмотреть активность\n\n"
+        "Пишите любой вопрос текстом — отвечу от лица автора 🙂",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "about")
+async def cb_about(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "ℹ️ <b>О БОТЕ</b>\n\n"
+        "Это литературный Telegram-бот на <b>aiogram 3</b>.\n"
+        "Отвечает в стиле русских классиков.\n\n"
+        "⚙️ Фишки:\n"
+        "• ИИ (GigaChat) + база знаний\n"
+        "• SQLite-хранилище истории и статистики\n"
+        "• Антифлуд\n"
+        "• Кэш ответов\n",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "select_author")
+async def cb_select_author(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "👥 <b>ВЫБЕРИТЕ АВТОРА</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_authors_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "list_authors")
+async def cb_list_authors(callback: CallbackQuery):
+    lines = ["📚 <b>ВСЕ ПИСАТЕЛИ</b>\n"]
+    for k in list_author_keys():
+        lines.append(f"• {get_author(k).get('name', k)}")
+    lines.append("\nНажмите «🎭 Выбрать автора», чтобы начать диалог.")
+    await callback.message.edit_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "stats")
+async def cb_stats(callback: CallbackQuery):
+    stats = await db.get_stats(callback.from_user.id)
+    await callback.message.edit_text(
+        pretty_stats_text(stats),
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+# ---------------- Callbacks: author selection & dialog management ----------------
+
+@router.callback_query(F.data.startswith("author_"))
+async def cb_author_selected(callback: CallbackQuery):
+    author_key = callback.data.split("_", 1)[1]
+    if author_key not in AUTHORS:
+        await callback.answer("Автор не найден")
+        return
+
+    await db.set_selected_author(callback.from_user.id, author_key)
+    author = get_author(author_key)
+
+    await callback.message.edit_text(
+        f"{author['name']}\n\n💬 {author['greeting']}\n\n<i>Задавайте вопросы — отвечу в своём стиле!</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_chat_keyboard(),
+    )
+    await callback.answer(f"Выбран: {author['name']}")
+
+
+@router.callback_query(F.data == "change_author")
+async def cb_change_author(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "👥 <b>ВЫБЕРИТЕ НОВОГО АВТОРА</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_authors_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "reset_chat")
+async def cb_reset_chat(callback: CallbackQuery):
+    await db.reset_dialog(callback.from_user.id)
+    await db.set_selected_author(callback.from_user.id, None)
+    await callback.message.edit_text(
+        "🔄 <b>Диалог сброшен!</b>\n\nВыберите автора:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_authors_keyboard(),
+    )
+    await callback.answer("Диалог сброшен")
+
+
+# ---------------- Messages ----------------
+
 @router.message(F.text)
 async def handle_message(message: Message):
-    """Обработка всех текстовых сообщений"""
     user_id = message.from_user.id
-    user_data = db.get_user_data(user_id)
-    
-    # Проверяем, выбран ли автор
-    if not user_data.get("selected_author"):
+
+    # антифлуд
+    if not rate_allow(user_id):
+        await message.answer("🛑 Слишком быстро 🙂 Подожди секунду и попробуй ещё раз.")
+        return
+
+    author_key = await db.get_selected_author(user_id)
+    if not author_key:
         await message.answer(
-            "❌ <b>Сначала выберите автора!</b>\n\nИспользуйте кнопки ниже:",
+            "❌ <b>Сначала выберите автора!</b>",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_authors_keyboard(),
         )
         return
-    
-    # Получаем данные автора
-    author_key = user_data["selected_author"]
-    author = AUTHORS.get(author_key)
-    
-    user_text = message.text
-    
-    # Показываем "автор думает"
+
+    author = get_author(author_key)
+    user_text = message.text.strip()
+
     thinking_msg = await message.answer(
         f"<i>✨ {author['name']} обдумывает ответ...</i>",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
     )
-    
+
     try:
-        # Генерируем ответ через GigaChat
+        history = await db.get_conversation_history(user_id, limit_pairs=4)
+
         response = await gigachat_client.generate_response(
             author_key=author_key,
             user_message=user_text,
-            conversation_history=user_data.get("conversation_history", [])
+            conversation_history=history,
+            cache_ttl_seconds=3600,
         )
-        
-        # Удаляем сообщение "думает"
+
         await thinking_msg.delete()
-        
-        # Отправляем ответ
-        response_text = f"{author['name']}\n\n{response}\n\n<code>💭 Продолжайте диалог или используйте кнопки</code>"
-        
+
+        # сохраняем
+        await db.add_message(user_id, author_key, "user", user_text)
+        await db.add_message(user_id, author_key, "assistant", response)
+
+        response_text = (
+            f"{author['name']}\n\n{response}\n\n"
+            "<code>💭 Продолжайте диалог или используйте кнопки</code>"
+        )
         await message.answer(
             response_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_chat_keyboard()
-        )
-        
-        # Сохраняем в историю
-        db.update_conversation(user_id, author_key, user_text, response)
-        
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await message.answer(
-            "⚠️ <b>Произошла ошибка!</b>\n\nПопробуйте:\n1. Перезапустить бота /start\n2. Задать вопрос по-другому",
-            parse_mode=ParseMode.HTML
+            reply_markup=get_chat_keyboard(),
         )
 
-# ========== ЗАПУСК БОТА ==========
+    except Exception as e:
+        logger.exception(f"Ошибка обработки сообщения: {e}")
+        try:
+            await thinking_msg.delete()
+        except Exception:
+            pass
+        await message.answer(
+            "⚠️ <b>Произошла ошибка!</b>\n\n"
+            "Попробуйте:\n"
+            "1) /start\n"
+            "2) переформулировать вопрос",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_main_menu_keyboard(),
+        )
+
+
+# ---------------- Startup ----------------
+
 async def main():
-    """Запуск бота"""
     print("=" * 50)
     print("🚀 ЗАПУСК ЛИТЕРАТУРНОГО БОТА")
     print("=" * 50)
-    print(f"🤖 Бот: {'✅ Токен загружен' if BOT_TOKEN else '❌ Токен не найден'}")
-    print(f"🧠 ИИ: {'✅ GigaChat доступен' if gigachat_client.client else '❌ GigaChat недоступен'}")
-    print("=" * 50)
-    print("\n🎯 Основные команды:")
-    print("• /start - Начать диалог")
-    print("• /help - Помощь")
-    print("• /authors - Список писателей")
-    print("=" * 50)
-    
+
+    await db.init()
+    # периодически чистим протухший кэш (можно редко — тут разово при старте)
+    await db.cache_cleanup()
+
     bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
     dp = Dispatcher()
     dp.include_router(router)
-    
+
     await bot.delete_webhook(drop_pending_updates=True)
-    print("\n✅ Бот запущен! Ожидает сообщений...")
-    
+    print("✅ Бот запущен! Ожидает сообщений...")
     await dp.start_polling(bot)
 
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 Бот остановлен")
+    asyncio.run(main())
