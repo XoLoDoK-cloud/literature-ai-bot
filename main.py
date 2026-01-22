@@ -1,9 +1,8 @@
-# main.py
 import asyncio
 import logging
 import os
-from aiohttp import web
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
@@ -12,12 +11,10 @@ from aiogram.types import Message, CallbackQuery, Update
 from config import BOT_TOKEN
 from database import db
 from authors import get_author, list_author_keys
-from inline_keyboards import (
-    get_main_menu_keyboard,
-    get_authors_keyboard,
-    get_chat_keyboard,
-)
+from inline_keyboards import get_main_menu_keyboard, get_authors_keyboard, get_chat_keyboard
 from gigachat_client import gigachat_client
+
+from rate_limit import RateLimitConfig, InMemoryRateLimiter, AntiFloodMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,48 +24,42 @@ router = Router()
 WEBHOOK_PATH = "/webhook"
 
 
-# ----------------- helpers -----------------
+def _get_base_url() -> str | None:
+    host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    if host:
+        return f"https://{host}"
+    manual = os.getenv("WEBHOOK_BASE_URL")
+    if manual:
+        return manual.rstrip("/")
+    return None
+
+
 def _safe_author_name(author_key: str | None) -> str:
     if not author_key:
         return "—"
     a = get_author(author_key) or {}
-    return a.get("name") or f"👤 {author_key}"
+    return a.get("name") or author_key
 
 
 def _render_stats(stats: dict) -> str:
-    fav_name = _safe_author_name(stats.get("favorite_author"))
+    fav = _safe_author_name(stats.get("favorite_author"))
     return (
         "📊 <b>Моя статистика</b>\n\n"
         f"💬 Сообщений от тебя: <b>{stats.get('total_user_messages', 0)}</b>\n"
         f"🤖 Ответов бота: <b>{stats.get('total_assistant_messages', 0)}</b>\n"
         f"🔄 Сбросов диалога: <b>{stats.get('total_dialog_resets', 0)}</b>\n"
-        f"⭐ Любимый автор: <b>{fav_name}</b>\n"
+        f"⭐ Любимый автор: <b>{fav}</b>\n"
     )
 
 
-def _get_base_url() -> str | None:
-    # Render Web Service
-    host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-    if host:
-        return f"https://{host}"
-
-    # Ручной вариант (если деплоишь не на Render)
-    manual = os.getenv("WEBHOOK_BASE_URL")
-    if manual:
-        return manual.rstrip("/")
-
-    return None
-
-
-# ----------------- commands -----------------
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user_name = message.from_user.first_name if message.from_user else "Друг"
     text = (
         f"✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨\n\n"
         f"👋 <b>Привет, {user_name}!</b>\n\n"
-        "🎭 Выбери писателя и задавай вопросы — я отвечу в его стиле.\n\n"
-        "Нажми: <b>🎭 Выбрать автора</b>\n"
+        "🎭 Выбери автора и задавай вопросы — отвечу в его стиле.\n"
+        "👇\n"
     )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
 
@@ -79,8 +70,8 @@ async def cmd_help(message: Message):
         "❓ <b>Помощь</b>\n\n"
         "1) Выбери автора\n"
         "2) Пиши вопросы обычным сообщением\n"
-        "3) Используй кнопки: сменить автора / сброс / статистика\n\n"
-        "💡 Если ИИ недоступен — бот ответит фактами из базы знаний.\n"
+        "3) Управляй диалогом кнопками\n\n"
+        "⚡ Есть антифлуд — не спамь сообщениями подряд.\n"
     )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
 
@@ -94,7 +85,6 @@ async def cmd_authors(message: Message):
     )
 
 
-# ----------------- menu callbacks -----------------
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(callback: CallbackQuery):
     await callback.message.edit_text(
@@ -121,7 +111,7 @@ async def cb_help(callback: CallbackQuery):
         "❓ <b>Помощь</b>\n\n"
         "• Выбери автора\n"
         "• Пиши вопросы обычным сообщением\n"
-        "• Кнопки снизу помогают управлять диалогом\n",
+        "• Кнопки снизу: сменить автора / сброс / статистика\n",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu_keyboard(),
     )
@@ -133,47 +123,13 @@ async def cb_about(callback: CallbackQuery):
     await callback.message.edit_text(
         "ℹ️ <b>О боте</b>\n\n"
         "Литературный чат-бот: выбираешь автора и общаешься в его стиле.\n"
-        "Использует GigaChat + базу знаний + кэш.\n",
+        "Использует: GigaChat + RAG (SQLite FTS) + кэш + статистику.\n",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu_keyboard(),
     )
     await callback.answer()
 
 
-# ----------------- author selection -----------------
-@router.callback_query(F.data.startswith("author_"))
-async def author_selected(callback: CallbackQuery):
-    author_key = callback.data.split("_", 1)[1]
-
-    if author_key not in list_author_keys():
-        await callback.answer("Автор не найден", show_alert=True)
-        return
-
-    author = get_author(author_key)
-    user_id = callback.from_user.id
-
-    # ✅ НОВЫЙ API БД (SQLite)
-    await db.set_selected_author(user_id, author_key)
-
-    await callback.message.edit_text(
-        f"{author['name']}\n\n💬 {author['greeting']}\n\n<i>Задавайте вопросы — отвечу в своём стиле!</i>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_chat_keyboard(),
-    )
-    await callback.answer(f"Выбран: {author['name']}")
-
-
-@router.callback_query(F.data == "change_author")
-async def change_author(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "👥 <b>Выберите автора</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard(),
-    )
-    await callback.answer()
-
-
-# ----------------- stats / reset -----------------
 @router.callback_query(F.data == "stats")
 async def cb_stats(callback: CallbackQuery):
     stats = await db.get_stats(callback.from_user.id)
@@ -188,8 +144,6 @@ async def cb_stats(callback: CallbackQuery):
 @router.callback_query(F.data == "reset_chat")
 async def reset_chat(callback: CallbackQuery):
     user_id = callback.from_user.id
-
-    # запоминаем выбранного автора, чтобы не заставлять выбирать снова
     author_key = await db.get_selected_author(user_id)
 
     await db.reset_dialog(user_id)
@@ -205,7 +159,35 @@ async def reset_chat(callback: CallbackQuery):
     await callback.answer("Диалог сброшен")
 
 
-# ----------------- message handler -----------------
+@router.callback_query(F.data == "change_author")
+async def change_author(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "👥 <b>Выберите автора</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_authors_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("author_"))
+async def author_selected(callback: CallbackQuery):
+    author_key = callback.data.split("_", 1)[1]
+    if author_key not in list_author_keys():
+        await callback.answer("Автор не найден", show_alert=True)
+        return
+
+    author = get_author(author_key)
+    user_id = callback.from_user.id
+    await db.set_selected_author(user_id, author_key)
+
+    await callback.message.edit_text(
+        f"{author['name']}\n\n💬 {author['greeting']}\n\n<i>Задавайте вопросы — отвечу в своём стиле!</i>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_chat_keyboard(),
+    )
+    await callback.answer(f"Выбран: {author['name']}")
+
+
 @router.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -224,10 +206,9 @@ async def handle_message(message: Message):
 
     author = get_author(author_key)
 
-    # сохраняем сообщение пользователя
+    # сохраняем сообщение
     await db.add_message(user_id, author_key, "user", text)
 
-    # история диалога из БД
     history = await db.get_conversation_history(user_id, limit_pairs=4)
 
     thinking = await message.answer(
@@ -242,10 +223,12 @@ async def handle_message(message: Message):
             conversation_history=history,
         )
 
-        # сохраняем ответ ассистента
         await db.add_message(user_id, author_key, "assistant", answer)
 
-        await thinking.delete()
+        try:
+            await thinking.delete()
+        except Exception:
+            pass
 
         await message.answer(
             f"{author['name']}\n\n{answer}",
@@ -253,7 +236,7 @@ async def handle_message(message: Message):
             reply_markup=get_chat_keyboard(),
         )
     except Exception as e:
-        logger.exception("Ошибка генерации ответа: %s", e)
+        logger.exception("Ошибка: %s", e)
         try:
             await thinking.delete()
         except Exception:
@@ -265,7 +248,8 @@ async def handle_message(message: Message):
         )
 
 
-# ----------------- webhook server -----------------
+# --------- WEBHOOK SERVER ---------
+
 async def handle_webhook(request: web.Request) -> web.Response:
     update = Update.model_validate(await request.json())
     await request.app["dp"].feed_update(request.app["bot"], update)
@@ -278,17 +262,17 @@ async def health(request: web.Request) -> web.Response:
 
 async def on_startup(app: web.Application):
     await db.init()
+    await db.ensure_knowledge_index()  # ✅ RAG-индекс
 
     bot: Bot = app["bot"]
     base_url = app.get("base_url")
     if base_url:
         webhook_url = base_url + WEBHOOK_PATH
-        # ✅ это убирает polling-конфликты навсегда
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.set_webhook(webhook_url)
         logger.info("✅ Webhook установлен: %s", webhook_url)
     else:
-        logger.info("ℹ️ Webhook URL не найден — стартуем polling")
+        logger.info("ℹ️ base_url не найден — webhook не ставим")
 
 
 async def on_shutdown(app: web.Application):
@@ -320,19 +304,14 @@ async def run_webhook(dp: Dispatcher, bot: Bot, base_url: str, port: int):
     await asyncio.Event().wait()
 
 
-async def run_polling(dp: Dispatcher, bot: Bot):
-    await db.init()
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        pass
-    logger.info("🚀 Бот запущен (polling)")
-    await dp.start_polling(bot)
-
-
 async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
+
+    # ✅ Антифлуд / rate-limit
+    limiter = InMemoryRateLimiter(RateLimitConfig())
+    dp.message.middleware(AntiFloodMiddleware(limiter))
+
     dp.include_router(router)
 
     base_url = _get_base_url()
@@ -341,7 +320,11 @@ async def main():
     if base_url:
         await run_webhook(dp, bot, base_url, port)
     else:
-        await run_polling(dp, bot)
+        # запасной вариант: если не Render
+        await db.init()
+        await db.ensure_knowledge_index()
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
