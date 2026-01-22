@@ -1,6 +1,6 @@
-import os
+# gigachat_client.py
 import asyncio
-from typing import List
+from typing import List, Optional
 
 try:
     from gigachat import GigaChat
@@ -8,118 +8,93 @@ try:
     GIGACHAT_AVAILABLE = True
 except ImportError:
     GIGACHAT_AVAILABLE = False
-    print("⚠️ GigaChat библиотека не установлена")
+
+from authors import get_author
+from knowledge_base import search_in_knowledge
+from database import db
+
 
 class GigaChatClient:
-    def __init__(self, credentials: str = None):
+    def __init__(self, credentials: Optional[str] = None):
         self.credentials = credentials
         self.client = None
-        
+
         if GIGACHAT_AVAILABLE and credentials:
             try:
+                # verify_ssl_certs=False — как у тебя было (часто нужно в некоторых окружениях)
                 self.client = GigaChat(credentials=credentials, verify_ssl_certs=False)
                 print("✅ GigaChat подключен")
             except Exception as e:
-                print(f"❌ Ошибка GigaChat: {e}")
+                print(f"❌ Ошибка подключения GigaChat: {e}")
                 self.client = None
         else:
-            print("⚠️ GigaChat недоступен")
-    
-    def _get_author_system_prompt(self, author_key: str) -> str:
-        """Системный промпт для каждого автора"""
-        prompts = {
-            "pushkin": """Ты - Александр Сергеевич Пушкин (1799-1837). 
-Отвечай как настоящий Пушкин. Используй факты:
-- Родился в Москве, учился в Царскосельском лицее
-- Автор "Евгения Онегина", "Капитанской дочки", "Бориса Годунова"
-- Был в ссылке в Кишинёве и Михайловском
-- Погиб на дуэли с Дантесом
-- Владел 13 языками
-Отвечай в поэтичном, изящном стиле. Говори о литературе, жизни, философии.""",
-            
-            "dostoevsky": """Ты - Фёдор Михайлович Достоевский (1821-1881).
-Отвечай как настоящий Достоевский. Используй факты:
-- Родился в Москве в семье врача
-- Был на каторге в Омске 4 года
-- Автор "Преступления и наказания", "Идиота", "Братьев Карамазовых"
-- Страдал эпилепсией
-- Играл в рулетку, имел долги
-Говори глубоко, философски, с психологическими нюансами.""",
-            
-            "tolstoy": """Ты - Лев Николаевич Толстой (1828-1910).
-Отвечай как настоящий Толстой. Используй факты:
-- Родился в Ясной Поляне
-- Участвовал в Крымской войне
-- Автор "Войны и мира", "Анны Карениной"
-- Открыл школу для крестьян
-- Пережил духовный кризис, отказался от собственности
-Говори мудро, просто, как наставник. Рассуждай о добре, зле, смысле жизни.""",
-            
-            "gogol": """Ты - Николай Васильевич Гоголь (1809-1852).
-Отвечай как настоящий Гоголь. Используй факты:
-- Родился на Украине в Великих Сорочинцах
-- Автор "Мёртвых душ", "Ревизора", "Вечеров на хуторе"
-- Любил Италию, жил в Риме много лет
-- Сжёг второй том "Мёртвых душ"
-- Боялся быть похороненным заживо
-Говори с юмором, иронией, мистическими нотками.""",
-            
-            "chekhov": """Ты - Антон Павлович Чехов (1860-1904).
-Отвечай как настоящий Чехов. Используй факты:
-- Врач по профессии, лечил больных бесплатно
-- Автор "Вишнёвого сада", "Чайки", "Трёх сестёр"
-- Путешествовал на Сахалин, изучал каторгу
-- Посадил более 1000 деревьев
-- Принцип: "Краткость - сестра таланта"
-Говори кратко, точно, с медицинской наблюдательностью.""",
-            
-            "gigachad": """Ты - ГИГАЧАД, мотивационный литературный эксперт.
-Ты знаешь ВСЁ о русской классике. 
-Говори энергично, с энтузиазмом, используй эмодзи:
-- КАЖДЫЙ ДЕНЬ читай классику! 📚
-- Пушкин? Легенда! Достоевский? Философский гигант!
-- Чтение - это качалка для мозга! 💪
-- Знаешь почему Толстой велик? Потому что ДЕЛАЛ!
-Отвечай кратко, мотивируй, давай конкретные факты."""
-        }
-        
-        return prompts.get(author_key, "Ты - русский писатель. Отвечай умно и интересно.")
-    
-    async def generate_response(self, author_key: str, user_message: str, conversation_history: List[dict] = None) -> str:
-        """Генерирует ответ от лица автора"""
-        
+            print("⚠️ GigaChat недоступен (нет библиотеки или credentials)")
+
+    async def generate_response(
+        self,
+        author_key: str,
+        user_message: str,
+        conversation_history: Optional[List[dict]] = None,
+        cache_ttl_seconds: int = 3600,
+    ) -> str:
+        author = get_author(author_key)
+        system_prompt = (author.get("system_prompt") or "Ты — русский писатель. Отвечай умно и интересно.").strip()
+
+        # 1) Подмешиваем базу знаний (если находит что-то по запросу)
+        knowledge_hint = search_in_knowledge(author_key, user_message).strip()
+        if knowledge_hint:
+            knowledge_block = (
+                "\n\nФакты из базы знаний (используй их, не выдумывай):\n"
+                f"{knowledge_hint}\n"
+            )
+        else:
+            knowledge_block = ""
+
+        # 2) Кэш: ключ зависит от автора + системного промпта + knowledge + вопроса
+        cache_key = db._make_cache_key(author_key, system_prompt, knowledge_block, user_message)
+        cached = await db.cache_get(cache_key)
+        if cached:
+            return cached
+
+        # 3) Если ИИ недоступен — фолбэк: база знаний или аккуратная заглушка
         if not self.client:
-            return "Извините, ИИ временно недоступен. Попробуйте позже."
-        
+            if knowledge_hint:
+                fallback = f"{knowledge_hint}\n\n(ИИ временно недоступен — отвечаю фактами из базы.)"
+                await db.cache_set(cache_key, author_key, db._hash_text(user_message), fallback, ttl_seconds=cache_ttl_seconds)
+                return fallback
+            return "ИИ временно недоступен. Попробуйте позже."
+
+        # 4) Собираем сообщения
+        messages = [Messages(role=MessagesRole.SYSTEM, content=system_prompt + knowledge_block)]
+
+        if conversation_history:
+            # берём последние 4 сообщения (как у тебя было), чтобы не раздувать контекст
+            for msg in conversation_history[-4:]:
+                role = MessagesRole.USER if msg["role"] == "user" else MessagesRole.ASSISTANT
+                messages.append(Messages(role=role, content=msg["content"]))
+
+        messages.append(Messages(role=MessagesRole.USER, content=user_message))
+
         try:
-            system_prompt = self._get_author_system_prompt(author_key)
-            
-            messages = [
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-            ]
-            
-            # Добавляем историю диалога
-            if conversation_history:
-                for msg in conversation_history[-4:]:  # Последние 4 сообщения
-                    role = MessagesRole.USER if msg["role"] == "user" else MessagesRole.ASSISTANT
-                    messages.append(Messages(role=role, content=msg["content"]))
-            
-            # Добавляем текущее сообщение
-            messages.append(Messages(role=MessagesRole.USER, content=user_message))
-            
-            # Вызываем GigaChat
             response = await asyncio.to_thread(
                 self.client.chat,
-                Chat(messages=messages, model="GigaChat:latest", temperature=0.7)
+                Chat(messages=messages, model="GigaChat:latest", temperature=0.7),
             )
-            
-            answer = response.choices[0].message.content
-            return answer.strip()
-            
+            answer = response.choices[0].message.content.strip()
+
+            await db.cache_set(cache_key, author_key, db._hash_text(user_message), answer, ttl_seconds=cache_ttl_seconds)
+            return answer
+
         except Exception as e:
             print(f"❌ Ошибка GigaChat: {e}")
+            # если есть база знаний — лучше отдать её, чем просто ошибку
+            if knowledge_hint:
+                fallback = f"{knowledge_hint}\n\n(ИИ ответить не смог — отвечаю фактами из базы.)"
+                await db.cache_set(cache_key, author_key, db._hash_text(user_message), fallback, ttl_seconds=600)
+                return fallback
             return "Простите, я задумался над вашим вопросом. Попробуйте переформулировать."
 
-# Инициализация клиента
+
+# Инициализация (credentials берём из config)
 from config import GIGACHAT_CREDENTIALS
 gigachat_client = GigaChatClient(GIGACHAT_CREDENTIALS)
