@@ -316,7 +316,7 @@ async def main():
     # периодически чистим протухший кэш (можно редко — тут разово при старте)
     await db.cache_cleanup()
 
-    bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
 
