@@ -70,7 +70,7 @@ try:
     from services.database import db
     from services.gigachat_client import gigachat_client
     from services.knowledge_base import search_in_knowledge
-    from services.inline_keyboards import (
+    from keyboards.inline_keyboards import (
         get_authors_keyboard,
         get_chat_keyboard,
         get_main_menu_keyboard,
