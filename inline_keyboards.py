@@ -7,7 +7,6 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🎭 Выбрать автора", callback_data="select_author"),
             InlineKeyboardButton(text="📚 Все писатели", callback_data="list_authors"),
-            InlineKeyboardButton(text="💪 ГИГАЧАД", callback_data="author_gigachad"),
         ],
         [
             InlineKeyboardButton(text="📊 Моя статистика", callback_data="stats"),
@@ -34,7 +33,6 @@ def get_authors_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="💪 ГИГАЧАД", callback_data="author_gigachad"),
         ],
         [
-            InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
             InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu"),
         ],
     ]
