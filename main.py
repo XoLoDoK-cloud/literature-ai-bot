@@ -13,14 +13,12 @@ from database import db
 from authors import get_author, list_author_keys
 from inline_keyboards import get_main_menu_keyboard, get_authors_keyboard, get_chat_keyboard
 from gigachat_client import gigachat_client
-
 from rate_limit import RateLimitConfig, InMemoryRateLimiter, AntiFloodMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = Router()
-
 WEBHOOK_PATH = "/webhook"
 
 
@@ -59,7 +57,6 @@ async def cmd_start(message: Message):
         f"✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨\n\n"
         f"👋 <b>Привет, {user_name}!</b>\n\n"
         "🎭 Выбери автора и задавай вопросы — отвечу в его стиле.\n"
-        "👇\n"
     )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_main_menu_keyboard())
 
@@ -123,7 +120,7 @@ async def cb_about(callback: CallbackQuery):
     await callback.message.edit_text(
         "ℹ️ <b>О боте</b>\n\n"
         "Литературный чат-бот: выбираешь автора и общаешься в его стиле.\n"
-        "Использует: GigaChat + RAG (SQLite FTS) + кэш + статистику.\n",
+        "Использует: GigaChat + RAG (SQLite FTS) + кэш + статистику + антифлуд.\n",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu_keyboard(),
     )
@@ -206,9 +203,7 @@ async def handle_message(message: Message):
 
     author = get_author(author_key)
 
-    # сохраняем сообщение
     await db.add_message(user_id, author_key, "user", text)
-
     history = await db.get_conversation_history(user_id, limit_pairs=4)
 
     thinking = await message.answer(
@@ -262,7 +257,7 @@ async def health(request: web.Request) -> web.Response:
 
 async def on_startup(app: web.Application):
     await db.init()
-    await db.ensure_knowledge_index()  # ✅ RAG-индекс
+    await db.ensure_knowledge_index()  # ✅ RAG индекс
 
     bot: Bot = app["bot"]
     base_url = app.get("base_url")
@@ -271,8 +266,6 @@ async def on_startup(app: web.Application):
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.set_webhook(webhook_url)
         logger.info("✅ Webhook установлен: %s", webhook_url)
-    else:
-        logger.info("ℹ️ base_url не найден — webhook не ставим")
 
 
 async def on_shutdown(app: web.Application):
@@ -308,7 +301,7 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
-    # ✅ Антифлуд / rate-limit
+    # ✅ антифлуд
     limiter = InMemoryRateLimiter(RateLimitConfig())
     dp.message.middleware(AntiFloodMiddleware(limiter))
 
@@ -320,7 +313,7 @@ async def main():
     if base_url:
         await run_webhook(dp, bot, base_url, port)
     else:
-        # запасной вариант: если не Render
+        # fallback для не-Render окружений
         await db.init()
         await db.ensure_knowledge_index()
         await bot.delete_webhook(drop_pending_updates=True)
