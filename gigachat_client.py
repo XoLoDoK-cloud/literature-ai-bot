@@ -5,8 +5,8 @@ from typing import List, Optional
 
 from authors import get_author
 from database import db
-from config import GIGACHAT_CREDENTIALS, GIGACHAT_SCOPE, RAG_TOP_K
-from knowledge_base import retrieve_passages, is_fact_question, fact_snippet
+from config import GIGACHAT_CREDENTIALS, GIGACHAT_SCOPE
+from knowledge_base import format_facts_for_user
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,27 +20,30 @@ except ImportError:
     logger.error("❌ Библиотека gigachat не установлена")
 
 
-def _build_rag_block(passages: List[str]) -> str:
-    if not passages:
-        return ""
-    # ограничим размер контекста
-    trimmed = []
-    total = 0
-    for p in passages:
-        p = p.strip()
-        if not p:
-            continue
-        if total + len(p) > 1800:
-            break
-        trimmed.append(p)
-        total += len(p)
-    if not trimmed:
-        return ""
-    joined = "\n\n---\n\n".join(trimmed)
-    return (
-        "\n\nКОНТЕКСТ (факты из базы, используй только это; не выдумывай):\n"
-        f"{joined}\n"
+def _is_fact_question(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    fact_markers = (
+        "когда", "где", "кто", "сколько", "дата", "год",
+        "родился", "родилась", "умер", "умерла", "причина смерти",
+        "в каком году", "в каком", "место рождения", "где жил", "где учился"
     )
+    if any(m in t for m in fact_markers):
+        return True
+    return len(t) <= 32 and t.endswith("?")
+
+
+def _rag_block(rag_results: list[dict]) -> str:
+    if not rag_results:
+        return ""
+    parts = []
+    for r in rag_results[:5]:
+        title = r.get("title", "Факт")
+        content = (r.get("content", "") or "").strip()
+        if content:
+            parts.append(f"[{title}]\n{content}")
+    return "\n\n".join(parts).strip()
 
 
 class GigaChatClient:
@@ -67,13 +70,6 @@ class GigaChatClient:
             logger.exception("❌ Ошибка инициализации GigaChat: %s", e)
             self.client = None
 
-    async def _chat(self, messages: List[Messages], temperature: float = 0.7) -> str:
-        response = await asyncio.to_thread(
-            self.client.chat,
-            Chat(messages=messages, model="GigaChat:latest", temperature=temperature),
-        )
-        return response.choices[0].message.content.strip()
-
     async def generate_response(
         self,
         author_key: str,
@@ -84,83 +80,82 @@ class GigaChatClient:
         author = get_author(author_key)
         system_prompt = (author.get("system_prompt") or "Ты — русский писатель.").strip()
 
-        # --- RAG контекст ---
-        rag_passages = retrieve_passages(author_key, user_message, top_k=RAG_TOP_K)
-        rag_block = _build_rag_block(rag_passages)
+        rag_results = await db.kb_search(author_key=author_key, query=user_message, k=6)
+        rag_text = _rag_block(rag_results)
+        rag_fallback = format_facts_for_user(rag_results)
 
-        # --- кэш (учитывает RAG) ---
-        cache_key = db._make_cache_key(author_key, system_prompt, rag_block, user_message)
+        want_fact = _is_fact_question(user_message) and bool(rag_results)
+
+        knowledge_block = (
+            f"\n\nФакты из базы знаний (используй только их, не выдумывай):\n{rag_text}\n"
+            if rag_text else ""
+        )
+
+        cache_key = db._make_cache_key(author_key, system_prompt, knowledge_block, user_message)
         cached = await db.cache_get(cache_key)
         if cached:
             return cached
 
-        # --- если ИИ недоступен: отдаём факты, если это факт-вопрос ---
         if not self.client:
-            if is_fact_question(user_message):
-                facts = fact_snippet(author_key, user_message)
-                if facts:
-                    fallback = f"{facts}\n\n(ИИ недоступен — отвечаю фактами из базы.)"
-                    await db.cache_set(cache_key, author_key, db._hash_text(user_message), fallback, ttl_seconds=cache_ttl_seconds)
-                    return fallback
+            if rag_fallback:
+                out = rag_fallback + "\n\n(ИИ временно недоступен — отвечаю фактами из базы.)"
+                await db.cache_set(cache_key, author_key, db._hash_text(user_message), out, ttl_seconds=600)
+                return out
             return "ИИ временно недоступен. Попробуйте позже."
 
-        # ------------------ УМНАЯ ЛОГИКА ------------------
-        # 1) Если вопрос фактологический и факты есть:
-        #    - сначала берём точный факт
-        #    - затем просим ИИ кратко “обернуть” ответ стилем автора, не добавляя фактов
-        if is_fact_question(user_message):
-            facts = fact_snippet(author_key, user_message)
-            if facts:
-                # Стиль автора поверх факта (коротко, без выдумок)
-                style_system = (
-                    system_prompt
-                    + "\n\nТвоя задача: ответь КОРОТКО на вопрос пользователя, "
-                      "используя ТОЛЬКО факты из блока ФАКТЫ. "
-                      "НЕЛЬЗЯ добавлять новые факты, даты, имена. "
-                      "Если фактов недостаточно — скажи, что точных данных нет."
-                    + "\n\nФАКТЫ:\n"
-                    + facts
-                )
+        messages = []
 
-                messages = [Messages(role=MessagesRole.SYSTEM, content=style_system)]
-                messages.append(Messages(role=MessagesRole.USER, content=user_message))
+        if want_fact:
+            sys = (
+                system_prompt
+                + "\n\nТы отвечаешь ТОЛЬКО по данным фактам ниже. Ничего не выдумывай."
+                + "\nОтвет: сначала 2–6 пунктов фактов, потом 1–2 предложения в стиле автора."
+                + knowledge_block
+            )
+            messages.append(Messages(role=MessagesRole.SYSTEM, content=sys))
+            messages.append(Messages(role=MessagesRole.USER, content=user_message))
+        else:
+            sys = (
+                system_prompt
+                + "\n\nЕсли в блоке фактов есть нужные сведения — опирайся на них и не выдумывай."
+                + knowledge_block
+            )
+            messages.append(Messages(role=MessagesRole.SYSTEM, content=sys))
 
-                try:
-                    styled = await self._chat(messages, temperature=0.4)
-                    final = f"{facts}\n\n{styled}".strip()
-                    await db.cache_set(cache_key, author_key, db._hash_text(user_message), final, ttl_seconds=cache_ttl_seconds)
-                    return final
-                except Exception as e:
-                    logger.exception("❌ Ошибка стиль-обёртки факта: %s", e)
-                    # если стиль не вышел — хотя бы факты
-                    await db.cache_set(cache_key, author_key, db._hash_text(user_message), facts, ttl_seconds=cache_ttl_seconds)
-                    return facts
+            if conversation_history:
+                for msg in conversation_history[-6:]:
+                    role = MessagesRole.USER if msg["role"] == "user" else MessagesRole.ASSISTANT
+                    messages.append(Messages(role=role, content=msg["content"]))
 
-        # 2) Иначе: обычный диалог с RAG контекстом + история
-        messages = [
-            Messages(role=MessagesRole.SYSTEM, content=system_prompt + rag_block)
-        ]
-
-        if conversation_history:
-            for msg in conversation_history[-6:]:
-                role = MessagesRole.USER if msg["role"] == "user" else MessagesRole.ASSISTANT
-                messages.append(Messages(role=role, content=msg["content"]))
-
-        messages.append(Messages(role=MessagesRole.USER, content=user_message))
+            messages.append(Messages(role=MessagesRole.USER, content=user_message))
 
         try:
-            answer = await self._chat(messages, temperature=0.7)
-            await db.cache_set(cache_key, author_key, db._hash_text(user_message), answer, ttl_seconds=cache_ttl_seconds)
+            response = await asyncio.to_thread(
+                self.client.chat,
+                Chat(
+                    messages=messages,
+                    model="GigaChat:latest",
+                    temperature=0.65 if want_fact else 0.75,
+                ),
+            )
+            answer = response.choices[0].message.content.strip()
+
+            await db.cache_set(
+                cache_key,
+                author_key,
+                db._hash_text(user_message),
+                answer,
+                ttl_seconds=7200 if want_fact else cache_ttl_seconds,
+            )
             return answer
+
         except Exception as e:
             logger.exception("❌ Ошибка запроса к GigaChat: %s", e)
-            # fallback: если факты есть — отдадим их
-            facts = fact_snippet(author_key, user_message)
-            if facts:
-                fallback = f"{facts}\n\n(ИИ ответить не смог — отвечаю фактами из базы.)"
-                await db.cache_set(cache_key, author_key, db._hash_text(user_message), fallback, ttl_seconds=600)
-                return fallback
+            if rag_fallback:
+                out = rag_fallback + "\n\n(ИИ ответить не смог — отвечаю фактами из базы.)"
+                await db.cache_set(cache_key, author_key, db._hash_text(user_message), out, ttl_seconds=600)
+                return out
             return "ИИ временно недоступен. Попробуйте позже."
 
 
-gigachat_client = GigaChatClient(GIG_
+gigachat_client = GigaChatClient(GIGACHAT_CREDENTIALS)
