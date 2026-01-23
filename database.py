@@ -81,6 +81,20 @@ class Database:
                 )
             """)
 
+            # META (для версии/хэша знаний)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
+            # RAG: полнотекстовый индекс (FTS5)
+            await conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
+                USING fts5(author_key, title, content)
+            """)
+
             await conn.commit()
 
         await self._migrate_legacy_json()
@@ -251,14 +265,82 @@ class Database:
             """, (cache_key, author_key, user_text_hash, response, now, expires_at))
             await conn.commit()
 
-    async def cache_cleanup(self) -> None:
-        now = _now_ts()
+    # ---------------- META ----------------
+
+    async def get_meta(self, key: str) -> Optional[str]:
         async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute("DELETE FROM response_cache WHERE expires_at <= ?", (now,))
+            cur = await conn.execute("SELECT value FROM meta WHERE key=?", (key,))
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO meta(key, value) VALUES(?,?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, (key, value))
             await conn.commit()
 
+    # ---------------- RAG / FTS ----------------
+
+    async def kb_reindex(self, chunks: list[dict]) -> None:
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("DELETE FROM knowledge_fts")
+            await conn.executemany(
+                "INSERT INTO knowledge_fts(author_key, title, content) VALUES(?,?,?)",
+                [(c["author_key"], c["title"], c["content"]) for c in chunks],
+            )
+            await conn.commit()
+
+    async def kb_search(self, author_key: str, query: str, k: int = 6) -> list[dict]:
+        from knowledge_base import normalize_query_for_fts
+
+        match_q = normalize_query_for_fts(query)
+        if not match_q:
+            return []
+
+        async with aiosqlite.connect(self.db_path) as conn:
+            try:
+                cur = await conn.execute(
+                    """
+                    SELECT author_key, title, content, bm25(knowledge_fts) as score
+                    FROM knowledge_fts
+                    WHERE knowledge_fts MATCH ? AND author_key = ?
+                    ORDER BY score
+                    LIMIT ?
+                    """,
+                    (match_q, author_key, k),
+                )
+                rows = await cur.fetchall()
+            except Exception:
+                cur = await conn.execute(
+                    """
+                    SELECT author_key, title, content, 0.0 as score
+                    FROM knowledge_fts
+                    WHERE author_key = ? AND (title LIKE ? OR content LIKE ?)
+                    LIMIT ?
+                    """,
+                    (author_key, f"%{query}%", f"%{query}%", k),
+                )
+                rows = await cur.fetchall()
+
+        return [{"author_key": a, "title": t, "content": c, "score": float(s)} for a, t, c, s in rows]
+
+    async def ensure_knowledge_index(self) -> None:
+        from knowledge_base import build_knowledge_chunks, knowledge_hash
+
+        cur_hash = knowledge_hash()
+        prev_hash = await self.get_meta("knowledge_hash")
+        if prev_hash == cur_hash:
+            return
+
+        chunks = build_knowledge_chunks()
+        await self.kb_reindex(chunks)
+        await self.set_meta("knowledge_hash", cur_hash)
+
+    # ---------------- legacy JSON migration ----------------
+
     async def _migrate_legacy_json(self) -> None:
-        # перенос старых data/*.json если они были
         if not os.path.isdir(self.legacy_dir):
             return
         for fname in os.listdir(self.legacy_dir):
