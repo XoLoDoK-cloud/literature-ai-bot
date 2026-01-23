@@ -1,156 +1,337 @@
 # knowledge_base.py
 """
-База знаний + RAG (поиск релевантных пасажей).
-Без внешних библиотек: делаем BM25-подобный скоринг.
+База знаний о русских писателях + RAG-утилиты для SQLite FTS5.
+
+Этот файл содержит:
+- WRITERS_KNOWLEDGE (твоя база знаний, без изменений)
+- build_knowledge_chunks(): преобразует знания в чанки для FTS5
+- knowledge_hash(): хэш базы знаний для авто-переиндексации
+- format_facts_for_user(): красиво выводит факты пользователю (fallback)
 """
 
 from __future__ import annotations
-import math
+
+import hashlib
+import json
 import re
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any
 
-# ---- ТВОЯ БАЗА ЗНАНИЙ (оставляем как есть, можно расширять) ----
-# ВСТАВЬ СЮДА СВОЙ WRITERS_KNOWLEDGE, если он у тебя большой.
-# Ниже — примерная структура; у тебя уже есть полный словарь.
-from typing import cast
-
-WRITERS_KNOWLEDGE: Dict[str, Dict[str, Any]] = {
-    # ⚠️ Здесь должен быть твой полный словарь.
-    # Оставь как в твоём текущем файле (из проекта).
+WRITERS_KNOWLEDGE = {
+    "pushkin": {
+        "full_name": "Александр Сергеевич Пушкин",
+        "birth": {
+            "date": "26 мая (6 июня) 1799",
+            "place": "Москва, Немецкая улица",
+            "family": "Сергей Львович Пушкин (отец), Надежда Осиповна Ганнибал (мать)"
+        },
+        "death": {
+            "date": "29 января (10 февраля) 1837",
+            "place": "Санкт-Петербург, набережная реки Мойки, 12",
+            "cause": "Смертельное ранение на дуэли с Жоржем Дантесом"
+        },
+        "education": {
+            "lyceum": "Царскосельский лицей (1811-1817)",
+            "graduation": "Выпустился в чине коллежского секретаря"
+        },
+        "life_events": [
+            "Участник литературного общества 'Арзамас'",
+            "Ссылка в Южную Россию (1820-1824): Екатеринослав, Кишинёв, Одесса",
+            "Ссылка в Михайловское (1824-1826)",
+            "Женился на Наталье Гончаровой (1831)",
+            "Открыл журнал 'Современник' (1836)"
+        ],
+        "major_works": [
+            "Роман в стихах 'Евгений Онегин'",
+            "Повесть 'Капитанская дочка'",
+            "Трагедия 'Борис Годунов'",
+            "Поэма 'Руслан и Людмила'",
+            "Цикл 'Повести Белкина'"
+        ],
+        "interesting_facts": [
+            "Знал несколько языков, включая французский (родной в детстве)",
+            "Создал современный русский литературный язык",
+            "Написал более 800 стихотворений",
+            "Его произведения переведены более чем на 100 языков"
+        ]
+    },
+    "dostoevsky": {
+        "full_name": "Фёдор Михайлович Достоевский",
+        "birth": {
+            "date": "30 октября (11 ноября) 1821",
+            "place": "Москва",
+            "family": "Михаил Андреевич Достоевский (отец-врач), Мария Фёдоровна (мать)"
+        },
+        "death": {
+            "date": "28 января (9 февраля) 1881",
+            "place": "Санкт-Петербург",
+            "cause": "Эмфизема лёгких, осложнения"
+        },
+        "education": {
+            "school": "Николаевское инженерное училище (1838-1843)",
+            "profession": "Военный инженер"
+        },
+        "life_events": [
+            "Участие в кружке Петрашевского (1849)",
+            "Арест и приговор к расстрелу (помилован в последний момент)",
+            "Каторга в Омске (1850-1854)",
+            "Служба солдатом в Семипалатинске (1854-1859)",
+            "Игровая зависимость (рулетка)",
+            "Женился на Анне Сниткиной (1867)"
+        ],
+        "major_works": [
+            "Роман 'Преступление и наказание'",
+            "Роман 'Идиот'",
+            "Роман 'Братья Карамазовы'",
+            "Роман 'Бесы'",
+            "Повесть 'Записки из подполья'"
+        ],
+        "philosophy": [
+            "Исследовал глубины человеческой психологии",
+            "Темы: вера, сомнение, мораль, свобода выбора",
+            "Концепция 'униженных и оскорблённых'",
+            "Идея искупления через страдание"
+        ],
+        "interesting_facts": [
+            "Страдал эпилепсией",
+            "Написал 'Игрока' за 26 дней из-за долгов",
+            "Читал Евангелие на каторге — единственная разрешённая книга",
+            "Считается предтечей экзистенциализма"
+        ]
+    },
+    "tolstoy": {
+        "full_name": "Лев Николаевич Толстой",
+        "birth": {
+            "date": "28 августа (9 сентября) 1828",
+            "place": "Ясная Поляна, Тульская губерния",
+            "family": "Граф Николай Ильич Толстой (отец), Мария Николаевна (мать)"
+        },
+        "death": {
+            "date": "7 (20) ноября 1910",
+            "place": "Станция Астапово (ныне Лев Толстой), Рязанская губерния",
+            "cause": "Воспаление лёгких"
+        },
+        "education": {
+            "university": "Казанский университет (1844-1847, не окончил)",
+            "self_education": "Занимался самообразованием всю жизнь"
+        },
+        "life_events": [
+            "Служба в армии на Кавказе (1851-1854)",
+            "Участие в Крымской войне, оборона Севастополя",
+            "Женился на Софье Берс (1862), 13 детей",
+            "Открыл школу для крестьянских детей в Ясной Поляне",
+            "Духовный кризис и религиозные поиски (1870-е)",
+            "Отлучён от православной церкви (1901)",
+            "Уход из дома в конце жизни (1910)"
+        ],
+        "major_works": [
+            "Роман-эпопея 'Война и мир'",
+            "Роман 'Анна Каренина'",
+            "Повесть 'Смерть Ивана Ильича'",
+            "Роман 'Воскресение'",
+            "Цикл 'Севастопольские рассказы'"
+        ],
+        "philosophy": [
+            "Ненасилие и непротивление злу",
+            "Простая жизнь и отказ от богатства",
+            "Любовь к ближнему как основа морали",
+            "Критика государства и церкви",
+            "Влияние на Ганди и движение ненасилия"
+        ],
+        "interesting_facts": [
+            "Отказался от авторских прав на поздние произведения",
+            "Вёл дневники всю жизнь (около 50 лет)",
+            "Был вегетарианцем последние 25 лет",
+            "Разработал собственную систему образования"
+        ]
+    },
+    "gogol": {
+        "full_name": "Николай Васильевич Гоголь",
+        "birth": {
+            "date": "20 марта (1 апреля) 1809",
+            "place": "Великие Сорочинцы, Полтавская губерния",
+            "family": "Василий Афанасьевич Гоголь-Яновский (отец), Мария Ивановна (мать)"
+        },
+        "death": {
+            "date": "21 февраля (4 марта) 1852",
+            "place": "Москва",
+            "cause": "Истощение, осложнения после голодания"
+        },
+        "education": {
+            "school": "Нежинская гимназия высших наук (1821-1828)"
+        },
+        "life_events": [
+            "Переезд в Петербург (1828)",
+            "Первая неудача с поэмой 'Ганц Кюхельгартен' (сжёг тираж)",
+            "Успех 'Вечеров на хуторе близ Диканьки' (1831-1832)",
+            "Работа учителем истории (1834-1835)",
+            "Долгое проживание в Риме и Европе (1836-1848)",
+            "Сжёг рукопись второго тома 'Мёртвых душ' (1852)"
+        ],
+        "major_works": [
+            "Поэма 'Мёртвые души'",
+            "Комедия 'Ревизор'",
+            "Повесть 'Шинель'",
+            "Сборник 'Вечера на хуторе близ Диканьки'",
+            "Повесть 'Тарас Бульба'"
+        ],
+        "interesting_facts": [
+            "Боялся быть похороненным заживо",
+            "Был очень религиозным в последние годы",
+            "Считал 'Мёртвые души' 'поэмой' по образцу 'Божественной комедии'",
+            "Его творчество оказало огромное влияние на русскую литературу"
+        ]
+    },
+    "chekhov": {
+        "full_name": "Антон Павлович Чехов",
+        "birth": {
+            "date": "17 (29) января 1860",
+            "place": "Таганрог",
+            "family": "Павел Егорович Чехов (отец), Евгения Яковлевна (мать)"
+        },
+        "death": {
+            "date": "2 (15) июля 1904",
+            "place": "Баденвайлер, Германия",
+            "cause": "Туберкулёз"
+        },
+        "education": {
+            "university": "Московский университет, медицинский факультет (1879-1884)",
+            "profession": "Врач"
+        },
+        "life_events": [
+            "Работал врачом, лечил бедных бесплатно",
+            "Путешествие на Сахалин (1890) — изучение каторги",
+            "Переезд в Мелихово (1892-1899)",
+            "Переезд в Ялту из-за болезни (1898)",
+            "Женился на Ольге Книппер (1901)"
+        ],
+        "major_works": [
+            "Пьеса 'Вишнёвый сад'",
+            "Пьеса 'Чайка'",
+            "Пьеса 'Три сестры'",
+            "Рассказ 'Дама с собачкой'",
+            "Рассказ 'Палата №6'"
+        ],
+        "writing_style": [
+            "Краткость и лаконичность",
+            "Подтекст и недосказанность",
+            "Внимание к деталям быта",
+            "Юмор и ирония",
+            "Психологическая глубина"
+        ],
+        "interesting_facts": [
+            "Написал более 600 рассказов",
+            "Использовал псевдонимы (Антоша Чехонте)",
+            "Сказал перед смертью: 'Ich sterbe' (Я умираю)",
+            "Принцип: 'Краткость — сестра таланта'",
+            "Вёл обширную переписку (сохранилось около 4000 писем)",
+            "Считал медицину своей женой, а литературу — любовницей"
+        ]
+    }
 }
 
-# ------------------- базовые helper'ы -------------------
-_WORD_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
 
-def _tokenize(text: str) -> List[str]:
-    return _WORD_RE.findall(text.lower())
-
-def get_writer_knowledge(author_key: str) -> Dict[str, Any]:
+def get_writer_knowledge(author_key: str) -> dict[str, Any]:
     return WRITERS_KNOWLEDGE.get(author_key, {})
 
-# ------------------- flatten -> passages -------------------
-def _flatten(obj: Any, prefix: str = "") -> List[str]:
-    lines: List[str] = []
-    if obj is None:
-        return lines
 
+def _flatten(obj: Any, prefix: str = "") -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
     if isinstance(obj, dict):
         for k, v in obj.items():
-            p = f"{prefix}{k}".strip(".")
-            if isinstance(v, (dict, list)):
-                lines.extend(_flatten(v, prefix=p + "."))
-            else:
-                lines.append(f"{p}: {v}")
-        return lines
-
+            key = f"{prefix}.{k}" if prefix else str(k)
+            out.extend(_flatten(v, key))
+        return out
     if isinstance(obj, list):
         for i, v in enumerate(obj):
-            p = f"{prefix}{i}".strip(".")
-            if isinstance(v, (dict, list)):
-                lines.extend(_flatten(v, prefix=p + "."))
-            else:
-                lines.append(f"{prefix.rstrip('.')}: {v}")
-        return lines
+            key = f"{prefix}[{i}]"
+            out.extend(_flatten(v, key))
+        return out
+    title = prefix or "info"
+    return [(title, str(obj))]
 
-    lines.append(f"{prefix.rstrip('.')}: {obj}")
-    return lines
 
-def build_passages(author_key: str, max_lines_per_passage: int = 3) -> List[str]:
-    kb = get_writer_knowledge(author_key)
-    if not kb:
-        return []
-    lines = _flatten(kb)
-    passages: List[str] = []
-    buf: List[str] = []
-    for ln in lines:
-        ln = str(ln).strip()
-        if not ln:
+def build_knowledge_chunks() -> list[dict]:
+    chunks: list[dict] = []
+    for author_key, data in WRITERS_KNOWLEDGE.items():
+        if not isinstance(data, dict):
             continue
-        buf.append(ln)
-        if len(buf) >= max_lines_per_passage:
-            passages.append("\n".join(buf))
-            buf = []
-    if buf:
-        passages.append("\n".join(buf))
-    return passages
 
-# ------------------- BM25-like index per author -------------------
-class _BM25Index:
-    def __init__(self, passages: List[str]):
-        self.passages = passages
-        self.docs = [ _tokenize(p) for p in passages ]
-        self.N = len(self.docs)
-        self.avgdl = (sum(len(d) for d in self.docs) / self.N) if self.N else 0.0
-        self.df: Dict[str, int] = {}
-        for d in self.docs:
-            seen = set(d)
-            for t in seen:
-                self.df[t] = self.df.get(t, 0) + 1
+        full_name = data.get("full_name") or author_key
+        card_lines = [f"Полное имя: {full_name}"]
 
-    def idf(self, t: str) -> float:
-        # классическая BM25 idf
-        df = self.df.get(t, 0)
-        if df == 0:
-            return 0.0
-        return math.log(1 + (self.N - df + 0.5) / (df + 0.5))
+        b = data.get("birth")
+        if isinstance(b, dict):
+            date = b.get("date", "")
+            place = b.get("place", "")
+            fam = b.get("family", "")
+            if date or place:
+                card_lines.append(f"Рождение: {date} — {place}".strip(" —"))
+            if fam:
+                card_lines.append(f"Семья: {fam}")
 
-    def score(self, query_tokens: List[str], k1: float = 1.2, b: float = 0.75) -> List[Tuple[int, float]]:
-        if not self.N:
-            return []
-        q = query_tokens
-        scores: List[Tuple[int, float]] = []
-        for i, d in enumerate(self.docs):
-            dl = len(d) or 1
-            tf: Dict[str, int] = {}
-            for t in d:
-                tf[t] = tf.get(t, 0) + 1
+        d = data.get("death")
+        if isinstance(d, dict):
+            date = d.get("date", "")
+            place = d.get("place", "")
+            cause = d.get("cause", "")
+            if date or place:
+                card_lines.append(f"Смерть: {date} — {place}".strip(" —"))
+            if cause:
+                card_lines.append(f"Причина смерти: {cause}")
 
-            s = 0.0
-            for t in q:
-                if t not in tf:
-                    continue
-                idf = self.idf(t)
-                freq = tf[t]
-                denom = freq + k1 * (1 - b + b * (dl / (self.avgdl or 1)))
-                s += idf * (freq * (k1 + 1) / denom)
-            if s > 0:
-                scores.append((i, s))
-        scores.sort(key=lambda x: x[1], reverse=True)
-        return scores
+        chunks.append({
+            "author_key": author_key,
+            "title": "Краткая справка",
+            "content": "\n".join([x for x in card_lines if x.strip()])
+        })
 
-_INDEX_CACHE: Dict[str, _BM25Index] = {}
+        flat = _flatten(data)
+        grouped: dict[str, list[str]] = {}
+        for path, value in flat:
+            top = path.split(".", 1)[0]
+            grouped.setdefault(top, [])
+            grouped[top].append(f"{path}: {value}")
 
-def retrieve_passages(author_key: str, query: str, top_k: int = 4) -> List[str]:
-    passages = build_passages(author_key)
-    if not passages:
-        return []
-    idx = _INDEX_CACHE.get(author_key)
-    if not idx or idx.passages != passages:
-        idx = _BM25Index(passages)
-        _INDEX_CACHE[author_key] = idx
+        for top, lines in grouped.items():
+            buf: list[str] = []
+            size = 0
+            for line in lines:
+                buf.append(line)
+                size += len(line)
+                if size > 900:
+                    chunks.append({"author_key": author_key, "title": top, "content": "\n".join(buf)})
+                    buf, size = [], 0
+            if buf:
+                chunks.append({"author_key": author_key, "title": top, "content": "\n".join(buf)})
 
-    qt = _tokenize(query)
-    ranked = idx.score(qt)
-    out: List[str] = []
-    for i, _s in ranked[:max(1, top_k)]:
-        out.append(passages[i])
-    return out
+    return chunks
 
-# ------------------- “быстрые факты” -------------------
-def is_fact_question(query: str) -> bool:
-    q = query.lower().strip()
-    # грубая эвристика, но работает для биографии/дат/мест
-    fact_markers = [
-        "когда", "в каком", "где", "сколько", "дата", "родился", "родилась",
-        "умер", "умерла", "погиб", "погибла", "место", "год", "век",
-        "кто такой", "что такое", "как зовут", "настоящее имя"
-    ]
-    if "?" in q:
-        return any(m in q for m in fact_markers)
-    # без вопроса — тоже может быть факт
-    return any(m in q for m in fact_markers)
 
-def fact_snippet(author_key: str, query: str) -> str:
-    # для фактов берём более “жёсткий” поиск: топ-2 пасажа
-    passages = retrieve_passages(author_key, query, top_k=2)
-    return "\n\n".join(passages).strip()
+def knowledge_hash() -> str:
+    raw = json.dumps(WRITERS_KNOWLEDGE, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def format_facts_for_user(results: list[dict], max_items: int = 6) -> str:
+    if not results:
+        return ""
+    lines: list[str] = []
+    for r in results[:max_items]:
+        title = (r.get("title") or "Факт").strip()
+        content = (r.get("content") or "").strip()
+        if not content:
+            continue
+        content_lines = [ln for ln in content.splitlines() if ln.strip()][:6]
+        if not content_lines:
+            continue
+        lines.append(f"• <b>{title}</b>\n" + "\n".join(content_lines))
+    return "\n\n".join(lines).strip()
+
+
+def normalize_query_for_fts(text: str) -> str:
+    t = (text or "").strip().lower()
+    tokens = re.findall(r"[0-9A-Za-zА-Яа-яЁё]+", t)
+    if not tokens:
+        return ""
+    tokens = tokens[:8]
+    return " AND ".join([tok + "*" for tok in tokens])
