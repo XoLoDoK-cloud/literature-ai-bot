@@ -1,10 +1,9 @@
 # database.py
 import os
-import json
 import time
 import hashlib
 import aiosqlite
-from typing import Optional, Any
+from typing import Optional, Any, List, Dict
 
 
 def _now_ts() -> int:
@@ -12,9 +11,8 @@ def _now_ts() -> int:
 
 
 class Database:
-    def __init__(self, db_path: str = "data/bot.db", legacy_dir: str = "data"):
+    def __init__(self, db_path: str = "data/bot.db"):
         self.db_path = db_path
-        self.legacy_dir = legacy_dir
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
     async def init(self) -> None:
@@ -38,8 +36,7 @@ class Database:
                     author_key TEXT NOT NULL,
                     role TEXT NOT NULL CHECK(role IN ('user','assistant')),
                     content TEXT NOT NULL,
-                    ts INTEGER NOT NULL,
-                    FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                    ts INTEGER NOT NULL
                 )
             """)
 
@@ -54,8 +51,7 @@ class Database:
                     total_user_messages INTEGER NOT NULL DEFAULT 0,
                     total_assistant_messages INTEGER NOT NULL DEFAULT 0,
                     total_dialog_resets INTEGER NOT NULL DEFAULT 0,
-                    updated_at INTEGER NOT NULL,
-                    FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                    updated_at INTEGER NOT NULL
                 )
             """)
 
@@ -65,23 +61,19 @@ class Database:
                     author_key TEXT NOT NULL,
                     user_messages INTEGER NOT NULL DEFAULT 0,
                     assistant_messages INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY(user_id, author_key),
-                    FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                    PRIMARY KEY(user_id, author_key)
                 )
             """)
 
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS response_cache (
                     cache_key TEXT PRIMARY KEY,
-                    author_key TEXT NOT NULL,
-                    user_text_hash TEXT NOT NULL,
                     response TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
                     expires_at INTEGER NOT NULL
                 )
             """)
 
-            # META (для версии/хэша знаний)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS meta (
                     key TEXT PRIMARY KEY,
@@ -89,15 +81,13 @@ class Database:
                 )
             """)
 
-            # RAG: полнотекстовый индекс (FTS5)
+            # RAG: FTS5
             await conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
                 USING fts5(author_key, title, content)
             """)
 
             await conn.commit()
-
-        await self._migrate_legacy_json()
 
     async def ensure_user(self, user_id: int) -> None:
         now = _now_ts()
@@ -110,7 +100,7 @@ class Database:
                     (user_id, None, now, now),
                 )
                 await conn.execute(
-                    "INSERT OR IGNORE INTO stats(user_id, total_user_messages, total_assistant_messages, total_dialog_resets, updated_at) VALUES(?,?,?,?,?)",
+                    "INSERT INTO stats(user_id, total_user_messages, total_assistant_messages, total_dialog_resets, updated_at) VALUES(?,?,?,?,?)",
                     (user_id, 0, 0, 0, now),
                 )
             else:
@@ -175,7 +165,7 @@ class Database:
 
             await conn.commit()
 
-    async def get_conversation_history(self, user_id: int, limit_pairs: int = 4) -> list[dict]:
+    async def get_history(self, user_id: int, limit_pairs: int = 4) -> List[Dict[str, str]]:
         await self.ensure_user(user_id)
         limit = max(2, limit_pairs * 2)
         async with aiosqlite.connect(self.db_path) as conn:
@@ -184,7 +174,6 @@ class Database:
                 (user_id, limit),
             )
             rows = await cur.fetchall()
-
         rows.reverse()
         return [{"role": r[0], "content": r[1]} for r in rows]
 
@@ -205,26 +194,17 @@ class Database:
             """, (user_id,))
             fav = await cur2.fetchone()
 
-            cur3 = await conn.execute("SELECT selected_author FROM users WHERE user_id=?", (user_id,))
-            last = await cur3.fetchone()
-
         return {
             "total_user_messages": row[0] if row else 0,
             "total_assistant_messages": row[1] if row else 0,
             "total_dialog_resets": row[2] if row else 0,
             "favorite_author": fav[0] if fav else None,
-            "selected_author": last[0] if last and last[0] else None,
         }
 
-    # ---------------- CACHE ----------------
-
+    # -------- cache --------
     @staticmethod
-    def _hash_text(text: str) -> str:
-        return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _make_cache_key(author_key: str, system_prompt: str, knowledge_hint: str, user_text: str) -> str:
-        blob = f"{author_key}\n{system_prompt}\n{knowledge_hint}\n{user_text.strip()}"
+    def make_cache_key(author_key: str, system_prompt: str, rag_text: str, user_text: str) -> str:
+        blob = f"{author_key}\n{system_prompt}\n{rag_text}\n{user_text.strip()}"
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     async def cache_get(self, cache_key: str) -> Optional[str]:
@@ -237,36 +217,28 @@ class Database:
             row = await cur.fetchone()
             if not row:
                 return None
-            response, expires_at = row
-            if expires_at <= now:
+            resp, exp = row
+            if exp <= now:
                 await conn.execute("DELETE FROM response_cache WHERE cache_key=?", (cache_key,))
                 await conn.commit()
                 return None
-            return response
+            return resp
 
-    async def cache_set(
-        self,
-        cache_key: str,
-        author_key: str,
-        user_text_hash: str,
-        response: str,
-        ttl_seconds: int = 3600,
-    ) -> None:
+    async def cache_set(self, cache_key: str, response: str, ttl_seconds: int = 3600) -> None:
         now = _now_ts()
-        expires_at = now + max(30, int(ttl_seconds))
+        exp = now + max(30, int(ttl_seconds))
         async with aiosqlite.connect(self.db_path) as conn:
             await conn.execute("""
-                INSERT INTO response_cache(cache_key, author_key, user_text_hash, response, created_at, expires_at)
-                VALUES(?,?,?,?,?,?)
+                INSERT INTO response_cache(cache_key, response, created_at, expires_at)
+                VALUES(?,?,?,?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     response=excluded.response,
                     created_at=excluded.created_at,
                     expires_at=excluded.expires_at
-            """, (cache_key, author_key, user_text_hash, response, now, expires_at))
+            """, (cache_key, response, now, exp))
             await conn.commit()
 
-    # ---------------- META ----------------
-
+    # -------- meta --------
     async def get_meta(self, key: str) -> Optional[str]:
         async with aiosqlite.connect(self.db_path) as conn:
             cur = await conn.execute("SELECT value FROM meta WHERE key=?", (key,))
@@ -281,9 +253,8 @@ class Database:
             """, (key, value))
             await conn.commit()
 
-    # ---------------- RAG / FTS ----------------
-
-    async def kb_reindex(self, chunks: list[dict]) -> None:
+    # -------- RAG FTS --------
+    async def kb_reindex(self, chunks: List[dict]) -> None:
         async with aiosqlite.connect(self.db_path) as conn:
             await conn.execute("DELETE FROM knowledge_fts")
             await conn.executemany(
@@ -292,90 +263,22 @@ class Database:
             )
             await conn.commit()
 
-    async def kb_search(self, author_key: str, query: str, k: int = 6) -> list[dict]:
-        from knowledge_base import normalize_query_for_fts
-
-        match_q = normalize_query_for_fts(query)
+    async def kb_search(self, author_key: str, match_q: str, k: int = 6) -> List[dict]:
         if not match_q:
             return []
-
         async with aiosqlite.connect(self.db_path) as conn:
-            try:
-                cur = await conn.execute(
-                    """
-                    SELECT author_key, title, content, bm25(knowledge_fts) as score
-                    FROM knowledge_fts
-                    WHERE knowledge_fts MATCH ? AND author_key = ?
-                    ORDER BY score
-                    LIMIT ?
-                    """,
-                    (match_q, author_key, k),
-                )
-                rows = await cur.fetchall()
-            except Exception:
-                cur = await conn.execute(
-                    """
-                    SELECT author_key, title, content, 0.0 as score
-                    FROM knowledge_fts
-                    WHERE author_key = ? AND (title LIKE ? OR content LIKE ?)
-                    LIMIT ?
-                    """,
-                    (author_key, f"%{query}%", f"%{query}%", k),
-                )
-                rows = await cur.fetchall()
-
+            cur = await conn.execute(
+                """
+                SELECT author_key, title, content, bm25(knowledge_fts) as score
+                FROM knowledge_fts
+                WHERE knowledge_fts MATCH ? AND author_key = ?
+                ORDER BY score
+                LIMIT ?
+                """,
+                (match_q, author_key, k),
+            )
+            rows = await cur.fetchall()
         return [{"author_key": a, "title": t, "content": c, "score": float(s)} for a, t, c, s in rows]
-
-    async def ensure_knowledge_index(self) -> None:
-        from knowledge_base import build_knowledge_chunks, knowledge_hash
-
-        cur_hash = knowledge_hash()
-        prev_hash = await self.get_meta("knowledge_hash")
-        if prev_hash == cur_hash:
-            return
-
-        chunks = build_knowledge_chunks()
-        await self.kb_reindex(chunks)
-        await self.set_meta("knowledge_hash", cur_hash)
-
-    # ---------------- legacy JSON migration ----------------
-
-    async def _migrate_legacy_json(self) -> None:
-        if not os.path.isdir(self.legacy_dir):
-            return
-        for fname in os.listdir(self.legacy_dir):
-            if not fname.endswith(".json"):
-                continue
-            path = os.path.join(self.legacy_dir, fname)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    payload = json.load(f)
-            except Exception:
-                continue
-
-            try:
-                user_id = int(os.path.splitext(fname)[0])
-            except Exception:
-                continue
-
-            await self.ensure_user(user_id)
-
-            sel = payload.get("selected_author")
-            if sel:
-                await self.set_selected_author(user_id, sel)
-
-            history = payload.get("conversation_history") or []
-            for msg in history:
-                role = msg.get("role")
-                content = msg.get("content", "")
-                if role in ("user", "assistant") and content:
-                    author_key = sel or "pushkin"
-                    await self.add_message(user_id, author_key, role, content)
-
-            try:
-                os.rename(path, path + ".migrated")
-            except Exception:
-                pass
 
 
 db = Database()
