@@ -25,10 +25,26 @@ def get_chat_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🆚 Сравнить авторов", callback_data="compare_authors"),
+            InlineKeyboardButton(text="✍️ Писать вместе", callback_data="cowrite"),
+        ],
+        [
             InlineKeyboardButton(text="🧹 Очистить всё", callback_data="clear_all"),
         ],
         [
             InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_cowrite_mode_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton(text="📖 Рассказ", callback_data="cowrite_prose"),
+            InlineKeyboardButton(text="📝 Стихотворение", callback_data="cowrite_poem"),
+        ],
+        [
+            InlineKeyboardButton(text="↩️ Назад", callback_data="main_menu"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
