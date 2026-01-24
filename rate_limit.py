@@ -1,4 +1,3 @@
-# rate_limit.py
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -10,14 +9,11 @@ from aiogram.types import Message
 
 @dataclass
 class RateLimitConfig:
-    # общий лимит
     max_messages: int = 6
     per_seconds: int = 10
 
-    # наказание
     cooldown_seconds: int = 12
 
-    # отдельный лимит на "тяжёлые" сообщения (ИИ)
     max_ai_messages: int = 3
     ai_per_seconds: int = 20
 
@@ -70,10 +66,6 @@ class InMemoryRateLimiter:
 
 
 class AntiFloodMiddleware(BaseMiddleware):
-    """
-    Антифлуд: режет слишком частые сообщения.
-    is_ai определяется эвристикой: длинное/творческое/объяснялки => тяжелее.
-    """
     def __init__(self, limiter: InMemoryRateLimiter):
         super().__init__()
         self.limiter = limiter
