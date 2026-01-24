@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional
 
 
 class Database:
@@ -30,18 +30,18 @@ class Database:
         data.setdefault("conversation_history", [])
         data.setdefault("created_at", datetime.now().isoformat())
 
-        # режимы/сравнение
+        # режим сравнения
         data.setdefault("mode", None)  # None | compare_first | compare_second
         data.setdefault("compare_first_author", None)
 
         return data
 
-    def save_user_data(self, user_id: int, data: dict):
+    def save_user_data(self, user_id: int, data: dict) -> None:
         file_path = self._get_user_file(user_id)
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    def update_conversation(self, user_id: int, author_key: str, user_message: str, bot_response: str):
+    def update_conversation(self, user_id: int, author_key: str, user_message: str, bot_response: str) -> None:
         data = self.get_user_data(user_id)
 
         data.setdefault("conversation_history", [])
@@ -78,6 +78,28 @@ class Database:
 
     def reset_compare(self, user_id: int) -> None:
         data = self.get_user_data(user_id)
+        data["mode"] = None
+        data["compare_first_author"] = None
+        self.save_user_data(user_id, data)
+
+    # ---------- reset helpers ----------
+
+    def reset_dialog(self, user_id: int, keep_author: bool = True) -> None:
+        data = self.get_user_data(user_id)
+        selected = data.get("selected_author") if keep_author else None
+        data["conversation_history"] = []
+        data["selected_author"] = selected
+        data["mode"] = None
+        data["compare_first_author"] = None
+        self.save_user_data(user_id, data)
+
+    def clear_all(self, user_id: int) -> None:
+        """
+        Полная очистка: история, выбранный автор, режимы.
+        """
+        data = self.get_user_data(user_id)
+        data["conversation_history"] = []
+        data["selected_author"] = None
         data["mode"] = None
         data["compare_first_author"] = None
         self.save_user_data(user_id, data)
