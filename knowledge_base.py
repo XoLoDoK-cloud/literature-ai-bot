@@ -335,3 +335,171 @@ def normalize_query_for_fts(text: str) -> str:
         return ""
     tokens = tokens[:8]
     return " AND ".join([tok + "*" for tok in tokens])
+# --- ДОБАВЬ В КОНЕЦ knowledge_base.py ---
+
+import re
+from typing import List, Dict, Any, Tuple
+
+
+def _tokens(text: str) -> List[str]:
+    t = (text or "").lower()
+    return re.findall(r"[0-9A-Za-zА-Яа-яЁё]+", t)
+
+
+def _flatten_to_text(obj: Any, prefix: str = "") -> List[Tuple[str, str]]:
+    """
+    Делает из вложенной структуры пары (path, text).
+    """
+    out: List[Tuple[str, str]] = []
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key = f"{prefix}.{k}" if prefix else str(k)
+            out.extend(_flatten_to_text(v, key))
+        return out
+
+    if isinstance(obj, list):
+        for i, v in enumerate(obj):
+            key = f"{prefix}[{i}]"
+            out.extend(_flatten_to_text(v, key))
+        return out
+
+    return [(prefix or "info", str(obj))]
+
+
+def rag_search(author_key: str, query: str, limit: int = 6) -> List[Dict[str, str]]:
+    """
+    RAG 2.0 (упрощённый, но нормальный):
+    - берём токены из вопроса
+    - ищем совпадения в плоских "строках" базы
+    - возвращаем top-N фрагментов
+    """
+    data = WRITERS_KNOWLEDGE.get(author_key, {})
+    if not isinstance(data, dict):
+        return []
+
+    q_tokens = _tokens(query)
+    if not q_tokens:
+        return []
+
+    flat = _flatten_to_text(data)
+    scored: List[Tuple[int, str, str]] = []
+
+    for path, text in flat:
+        low = (text or "").lower()
+        score = 0
+        for tok in q_tokens[:10]:
+            if tok in low:
+                score += 2
+        # бонус за важные разделы
+        top = path.split(".", 1)[0]
+        if top in ("birth", "death", "education", "key_works", "major_works", "life_events", "important_events"):
+            score += 1
+        if score > 0:
+            scored.append((score, path, text))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for score, path, text in scored:
+        title = path.split(".", 1)[0]
+        key = (title, text)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        out.append({
+            "title": title,
+            "content": f"{path}: {text}".strip()
+        })
+        if len(out) >= limit:
+            break
+
+    return out
+
+
+def format_rag_blocks(blocks: List[Dict[str, str]], max_chars: int = 1600) -> str:
+    """
+    Собирает блоки для промпта, ограничивая размер.
+    """
+    if not blocks:
+        return ""
+
+    parts = []
+    total = 0
+    for b in blocks:
+        chunk = f"[{b.get('title','fact')}]\n{b.get('content','')}".strip()
+        if not chunk:
+            continue
+        if total + len(chunk) > max_chars:
+            break
+        parts.append(chunk)
+        total += len(chunk) + 2
+    return "\n\n".join(parts)
+
+
+def get_author_card(author_key: str) -> Dict[str, Any]:
+    """
+    Карточка автора (для сравнения): имя, даты, темы/стиль/произведения.
+    """
+    data = WRITERS_KNOWLEDGE.get(author_key, {})
+    if not isinstance(data, dict):
+        return {}
+
+    full_name = data.get("full_name") or author_key
+
+    birth = data.get("birth") if isinstance(data.get("birth"), dict) else {}
+    death = data.get("death") if isinstance(data.get("death"), dict) else {}
+
+    # В разных версиях базы может быть key_works / major_works
+    works = data.get("key_works") or data.get("major_works") or []
+    works_list = []
+    if isinstance(works, list):
+        for w in works[:8]:
+            if isinstance(w, dict):
+                title = w.get("title")
+                if title:
+                    works_list.append(title)
+            else:
+                works_list.append(str(w))
+
+    themes = data.get("philosophy") or data.get("themes") or data.get("writing_style") or []
+    themes_list = []
+    if isinstance(themes, list):
+        themes_list = [str(x) for x in themes[:6]]
+
+    facts = data.get("interesting_facts") or []
+    facts_list = [str(x) for x in facts[:6]] if isinstance(facts, list) else []
+
+    return {
+        "author_key": author_key,
+        "full_name": full_name,
+        "birth_date": (birth or {}).get("date", ""),
+        "birth_place": (birth or {}).get("place", ""),
+        "death_date": (death or {}).get("date", ""),
+        "death_place": (death or {}).get("place", ""),
+        "works": works_list,
+        "themes": themes_list,
+        "facts": facts_list,
+    }
+
+
+def format_compare_facts(card: Dict[str, Any]) -> str:
+    """
+    Компактный блок фактов (для строгого сравнения)
+    """
+    if not card:
+        return ""
+    lines = [
+        f"Имя: {card.get('full_name','')}",
+        f"Рождение: {card.get('birth_date','')} — {card.get('birth_place','')}".strip(" —"),
+        f"Смерть: {card.get('death_date','')} — {card.get('death_place','')}".strip(" —"),
+    ]
+    if card.get("works"):
+        lines.append("Произведения: " + "; ".join(card["works"][:6]))
+    if card.get("themes"):
+        lines.append("Темы/стиль: " + "; ".join(card["themes"][:6]))
+    if card.get("facts"):
+        lines.append("Факты: " + "; ".join(card["facts"][:4]))
+    return "\n".join([x for x in lines if x.strip()])
