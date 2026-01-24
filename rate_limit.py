@@ -11,9 +11,7 @@ from aiogram.types import Message
 class RateLimitConfig:
     max_messages: int = 6
     per_seconds: int = 10
-
     cooldown_seconds: int = 12
-
     max_ai_messages: int = 3
     ai_per_seconds: int = 20
 
