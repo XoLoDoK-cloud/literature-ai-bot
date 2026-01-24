@@ -1,4 +1,29 @@
+# === Secrets ===
 .env
-venv/
+*.env
+
+# === User data ===
+data/
+*.json
+
+# === Python cache ===
 __pycache__/
-data/*.db
+*.pyc
+*.pyo
+*.pyd
+
+# === Virtual environments ===
+venv/
+.env/
+.venv/
+
+# === OS files ===
+.DS_Store
+Thumbs.db
+
+# === Logs ===
+*.log
+
+# === IDE ===
+.vscode/
+.idea/
