@@ -1,284 +1,132 @@
-# database.py
+import json
 import os
-import time
-import hashlib
-import aiosqlite
-from typing import Optional, Any, List, Dict
-
-
-def _now_ts() -> int:
-    return int(time.time())
+from datetime import datetime
+from typing import Dict, Any, Optional
 
 
 class Database:
-    def __init__(self, db_path: str = "data/bot.db"):
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+    """
+    Простая JSON-база (1 файл на пользователя).
+    Подходит для Render (1 инстанс). Для масштаба лучше SQLite/Postgres.
+    """
 
-    async def init(self) -> None:
-        async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute("PRAGMA journal_mode=WAL;")
-            await conn.execute("PRAGMA foreign_keys=ON;")
+    def __init__(self, data_dir: str = "data"):
+        self.data_dir = data_dir
+        os.makedirs(self.data_dir, exist_ok=True)
 
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    selected_author TEXT,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                )
-            """)
+    def _get_user_file(self, user_id: int) -> str:
+        return os.path.join(self.data_dir, f"user_{user_id}.json")
 
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    author_key TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
-                    content TEXT NOT NULL,
-                    ts INTEGER NOT NULL
-                )
-            """)
-
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_messages_user_ts
-                ON messages(user_id, ts)
-            """)
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS stats (
-                    user_id INTEGER PRIMARY KEY,
-                    total_user_messages INTEGER NOT NULL DEFAULT 0,
-                    total_assistant_messages INTEGER NOT NULL DEFAULT 0,
-                    total_dialog_resets INTEGER NOT NULL DEFAULT 0,
-                    updated_at INTEGER NOT NULL
-                )
-            """)
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS author_usage (
-                    user_id INTEGER NOT NULL,
-                    author_key TEXT NOT NULL,
-                    user_messages INTEGER NOT NULL DEFAULT 0,
-                    assistant_messages INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY(user_id, author_key)
-                )
-            """)
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS response_cache (
-                    cache_key TEXT PRIMARY KEY,
-                    response TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    expires_at INTEGER NOT NULL
-                )
-            """)
-
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-            """)
-
-            # RAG: FTS5
-            await conn.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts
-                USING fts5(author_key, title, content)
-            """)
-
-            await conn.commit()
-
-    async def ensure_user(self, user_id: int) -> None:
-        now = _now_ts()
-        async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
-            row = await cur.fetchone()
-            if not row:
-                await conn.execute(
-                    "INSERT INTO users(user_id, selected_author, created_at, updated_at) VALUES(?,?,?,?)",
-                    (user_id, None, now, now),
-                )
-                await conn.execute(
-                    "INSERT INTO stats(user_id, total_user_messages, total_assistant_messages, total_dialog_resets, updated_at) VALUES(?,?,?,?,?)",
-                    (user_id, 0, 0, 0, now),
-                )
-            else:
-                await conn.execute("UPDATE users SET updated_at=? WHERE user_id=?", (now, user_id))
-            await conn.commit()
-
-    async def get_selected_author(self, user_id: int) -> Optional[str]:
-        await self.ensure_user(user_id)
-        async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute("SELECT selected_author FROM users WHERE user_id=?", (user_id,))
-            row = await cur.fetchone()
-            return row[0] if row and row[0] else None
-
-    async def set_selected_author(self, user_id: int, author_key: Optional[str]) -> None:
-        await self.ensure_user(user_id)
-        async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute(
-                "UPDATE users SET selected_author=?, updated_at=? WHERE user_id=?",
-                (author_key, _now_ts(), user_id),
-            )
-            await conn.commit()
-
-    async def reset_dialog(self, user_id: int) -> None:
-        await self.ensure_user(user_id)
-        async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute("DELETE FROM messages WHERE user_id=?", (user_id,))
-            await conn.execute(
-                "UPDATE stats SET total_dialog_resets = total_dialog_resets + 1, updated_at=? WHERE user_id=?",
-                (_now_ts(), user_id),
-            )
-            await conn.commit()
-
-    async def add_message(self, user_id: int, author_key: str, role: str, content: str) -> None:
-        await self.ensure_user(user_id)
-        ts = _now_ts()
-        async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute(
-                "INSERT INTO messages(user_id, author_key, role, content, ts) VALUES(?,?,?,?,?)",
-                (user_id, author_key, role, content, ts),
-            )
-
-            if role == "user":
-                await conn.execute(
-                    "UPDATE stats SET total_user_messages = total_user_messages + 1, updated_at=? WHERE user_id=?",
-                    (ts, user_id),
-                )
-                await conn.execute("""
-                    INSERT INTO author_usage(user_id, author_key, user_messages, assistant_messages)
-                    VALUES(?,?,1,0)
-                    ON CONFLICT(user_id, author_key) DO UPDATE SET user_messages = user_messages + 1
-                """, (user_id, author_key))
-            else:
-                await conn.execute(
-                    "UPDATE stats SET total_assistant_messages = total_assistant_messages + 1, updated_at=? WHERE user_id=?",
-                    (ts, user_id),
-                )
-                await conn.execute("""
-                    INSERT INTO author_usage(user_id, author_key, user_messages, assistant_messages)
-                    VALUES(?,?,0,1)
-                    ON CONFLICT(user_id, author_key) DO UPDATE SET assistant_messages = assistant_messages + 1
-                """, (user_id, author_key))
-
-            await conn.commit()
-
-    async def get_history(self, user_id: int, limit_pairs: int = 4) -> List[Dict[str, str]]:
-        await self.ensure_user(user_id)
-        limit = max(2, limit_pairs * 2)
-        async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute(
-                "SELECT role, content FROM messages WHERE user_id=? ORDER BY ts DESC, id DESC LIMIT ?",
-                (user_id, limit),
-            )
-            rows = await cur.fetchall()
-        rows.reverse()
-        return [{"role": r[0], "content": r[1]} for r in rows]
-
-    async def get_stats(self, user_id: int) -> dict[str, Any]:
-        await self.ensure_user(user_id)
-        async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute("""
-                SELECT total_user_messages, total_assistant_messages, total_dialog_resets
-                FROM stats WHERE user_id=?
-            """, (user_id,))
-            row = await cur.fetchone()
-
-            cur2 = await conn.execute("""
-                SELECT author_key, (user_messages + assistant_messages) AS total
-                FROM author_usage WHERE user_id=?
-                ORDER BY total DESC
-                LIMIT 1
-            """, (user_id,))
-            fav = await cur2.fetchone()
-
+    def _default_user_data(self, user_id: int) -> Dict[str, Any]:
         return {
-            "total_user_messages": row[0] if row else 0,
-            "total_assistant_messages": row[1] if row else 0,
-            "total_dialog_resets": row[2] if row else 0,
-            "favorite_author": fav[0] if fav else None,
+            "user_id": user_id,
+            "selected_author": None,
+            "conversation_history": [],
+            "created_at": datetime.now().isoformat(),
+            "stats": {
+                "total_user_messages": 0,
+                "total_bot_messages": 0,
+                "dialog_resets": 0,
+                "author_usage": {}  # {author_key: count}
+            }
         }
 
-    # -------- cache --------
-    @staticmethod
-    def make_cache_key(author_key: str, system_prompt: str, rag_text: str, user_text: str) -> str:
-        blob = f"{author_key}\n{system_prompt}\n{rag_text}\n{user_text.strip()}"
-        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    def get_user_data(self, user_id: int) -> Dict[str, Any]:
+        file_path = self._get_user_file(user_id)
 
-    async def cache_get(self, cache_key: str) -> Optional[str]:
-        now = _now_ts()
-        async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute(
-                "SELECT response, expires_at FROM response_cache WHERE cache_key=?",
-                (cache_key,),
-            )
-            row = await cur.fetchone()
-            if not row:
-                return None
-            resp, exp = row
-            if exp <= now:
-                await conn.execute("DELETE FROM response_cache WHERE cache_key=?", (cache_key,))
-                await conn.commit()
-                return None
-            return resp
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = self._default_user_data(user_id)
+        else:
+            data = self._default_user_data(user_id)
 
-    async def cache_set(self, cache_key: str, response: str, ttl_seconds: int = 3600) -> None:
-        now = _now_ts()
-        exp = now + max(30, int(ttl_seconds))
-        async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute("""
-                INSERT INTO response_cache(cache_key, response, created_at, expires_at)
-                VALUES(?,?,?,?)
-                ON CONFLICT(cache_key) DO UPDATE SET
-                    response=excluded.response,
-                    created_at=excluded.created_at,
-                    expires_at=excluded.expires_at
-            """, (cache_key, response, now, exp))
-            await conn.commit()
+        # миграции/гарантии полей
+        data.setdefault("user_id", user_id)
+        data.setdefault("selected_author", None)
+        data.setdefault("conversation_history", [])
+        data.setdefault("created_at", datetime.now().isoformat())
+        data.setdefault("stats", {})
+        stats = data["stats"]
+        stats.setdefault("total_user_messages", 0)
+        stats.setdefault("total_bot_messages", 0)
+        stats.setdefault("dialog_resets", 0)
+        stats.setdefault("author_usage", {})
 
-    # -------- meta --------
-    async def get_meta(self, key: str) -> Optional[str]:
-        async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute("SELECT value FROM meta WHERE key=?", (key,))
-            row = await cur.fetchone()
-            return row[0] if row else None
+        return data
 
-    async def set_meta(self, key: str, value: str) -> None:
-        async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute("""
-                INSERT INTO meta(key, value) VALUES(?,?)
-                ON CONFLICT(key) DO UPDATE SET value=excluded.value
-            """, (key, value))
-            await conn.commit()
+    def save_user_data(self, user_id: int, data: Dict[str, Any]) -> None:
+        file_path = self._get_user_file(user_id)
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
-    # -------- RAG FTS --------
-    async def kb_reindex(self, chunks: List[dict]) -> None:
-        async with aiosqlite.connect(self.db_path) as conn:
-            await conn.execute("DELETE FROM knowledge_fts")
-            await conn.executemany(
-                "INSERT INTO knowledge_fts(author_key, title, content) VALUES(?,?,?)",
-                [(c["author_key"], c["title"], c["content"]) for c in chunks],
-            )
-            await conn.commit()
+    def set_selected_author(self, user_id: int, author_key: Optional[str]) -> None:
+        data = self.get_user_data(user_id)
+        data["selected_author"] = author_key
+        self.save_user_data(user_id, data)
 
-    async def kb_search(self, author_key: str, match_q: str, k: int = 6) -> List[dict]:
-        if not match_q:
-            return []
-        async with aiosqlite.connect(self.db_path) as conn:
-            cur = await conn.execute(
-                """
-                SELECT author_key, title, content, bm25(knowledge_fts) as score
-                FROM knowledge_fts
-                WHERE knowledge_fts MATCH ? AND author_key = ?
-                ORDER BY score
-                LIMIT ?
-                """,
-                (match_q, author_key, k),
-            )
-            rows = await cur.fetchall()
-        return [{"author_key": a, "title": t, "content": c, "score": float(s)} for a, t, c, s in rows]
+    def record_user_message(self, user_id: int, author_key: str, user_message: str) -> None:
+        data = self.get_user_data(user_id)
+        data["stats"]["total_user_messages"] += 1
+        usage = data["stats"]["author_usage"]
+        usage[author_key] = int(usage.get(author_key, 0)) + 1
+
+        data.setdefault("conversation_history", [])
+        data["conversation_history"].append({
+            "role": "user",
+            "content": user_message,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # ограничиваем историю (последние 12 сообщений)
+        if len(data["conversation_history"]) > 12:
+            data["conversation_history"] = data["conversation_history"][-12:]
+
+        data["selected_author"] = author_key
+        self.save_user_data(user_id, data)
+
+    def record_bot_message(self, user_id: int, author_key: str, bot_response: str) -> None:
+        data = self.get_user_data(user_id)
+        data["stats"]["total_bot_messages"] += 1
+
+        data.setdefault("conversation_history", [])
+        data["conversation_history"].append({
+            "role": "assistant",
+            "content": bot_response,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        if len(data["conversation_history"]) > 12:
+            data["conversation_history"] = data["conversation_history"][-12:]
+
+        data["selected_author"] = author_key
+        self.save_user_data(user_id, data)
+
+    def reset_dialog(self, user_id: int, keep_author: bool = True) -> None:
+        data = self.get_user_data(user_id)
+        selected = data.get("selected_author") if keep_author else None
+        data["conversation_history"] = []
+        data["stats"]["dialog_resets"] += 1
+        data["selected_author"] = selected
+        self.save_user_data(user_id, data)
+
+    def get_stats(self, user_id: int) -> Dict[str, Any]:
+        data = self.get_user_data(user_id)
+        stats = data.get("stats", {})
+        usage = stats.get("author_usage", {}) or {}
+        favorite_author = None
+        if usage:
+            favorite_author = max(usage.items(), key=lambda kv: kv[1])[0]
+
+        return {
+            "total_user_messages": int(stats.get("total_user_messages", 0)),
+            "total_bot_messages": int(stats.get("total_bot_messages", 0)),
+            "dialog_resets": int(stats.get("dialog_resets", 0)),
+            "favorite_author": favorite_author,
+            "selected_author": data.get("selected_author")
+        }
 
 
 db = Database()
