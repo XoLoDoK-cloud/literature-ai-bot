@@ -11,6 +11,9 @@ except ImportError:
 from config import GIGACHAT_CREDENTIALS
 from knowledge_base import rag_search, format_rag_blocks, get_author_card, format_compare_facts
 
+# ✅ ВАЖНО: берём стиль автора из вашего authors.py
+from authors import get_author
+
 
 def _is_fact_question(text: str) -> bool:
     t = (text or "").strip().lower()
@@ -36,6 +39,16 @@ class GigaChatClient:
                 self.client = None
 
     def _author_style_prompt(self, author_key: str) -> str:
+        """
+        1) Пытаемся взять system_prompt из authors.py
+        2) Если его нет — используем старый fallback styles
+        """
+        author = get_author(author_key) or {}
+        system_prompt = (author.get("system_prompt") or "").strip()
+        if system_prompt:
+            return system_prompt
+
+        # fallback (старое поведение, чтобы не ломать совместимость)
         styles = {
             "pushkin": "Ты — Александр Сергеевич Пушкин. Ясно, изящно, иногда поэтично. Даты не выдумывай.",
             "dostoevsky": "Ты — Фёдор Михайлович Достоевский. Глубоко, психологично. Даты не выдумывай.",
