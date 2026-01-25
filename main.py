@@ -9,7 +9,12 @@ from aiogram.enums import ParseMode
 from config import BOT_TOKEN
 from database import db
 from authors import get_author, list_author_keys
-from inline_keyboards import get_authors_keyboard, get_chat_keyboard, get_cowrite_mode_keyboard
+from inline_keyboards import (
+    get_groups_keyboard,
+    get_authors_keyboard,
+    get_chat_keyboard,
+    get_cowrite_mode_keyboard,
+)
 from gigachat_client import gigachat_client
 from rate_limit import RateLimitConfig, InMemoryRateLimiter, AntiFloodMiddleware
 
@@ -19,52 +24,31 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-# =========================
-# 🧹 ЖЁСТКИЙ СБРОС Telegram "хвостов"
-# =========================
-async def hard_reset_telegram(bot: Bot) -> None:
-    """
-    Иногда Telegram оставляет "хвост" предыдущего polling,
-    из-за чего появляется Conflict: terminated by other getUpdates request.
-    Этот сброс помогает "обнулить" состояние перед запуском.
-    """
-    try:
-        # 1) Убиваем вебхук и сносим накопленные апдейты
-        await bot.delete_webhook(drop_pending_updates=True)
-        # Небольшая пауза — реально помогает на некоторых хостингах
-        await asyncio.sleep(0.5)
-        # 2) Повторяем ещё раз — добиваем хвосты
-        await bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        logger.warning("hard_reset_telegram: не удалось полностью сбросить состояние: %s", e)
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     db.reset_compare(user_id)
-    # mode не трогаем принудительно тут — но обычно /start = новый вход
-    # если хочешь всегда сбрасывать режим соавторства при /start — раскомментируй:
-    # db.set_mode(user_id, None)
 
     user_name = message.from_user.first_name if message.from_user else "Друг"
     text = (
         f"✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨\n\n"
         f"👋 <b>Привет, {user_name}!</b>\n\n"
-        "🎭 Выбери автора и задавай вопросы — отвечу в его стиле.\n"
-        "✍️ Также можно писать произведение вместе.\n\n"
-        "👇 <b>Выберите автора:</b>"
+        "📚 Сначала выбери <b>сборник/эпоху</b>, затем автора.\n"
+        "🎭 Пиши вопросы — отвечу в стиле писателя.\n"
+        "✍️ Можно писать произведение вместе.\n\n"
+        "👇 <b>Выберите эпоху:</b>"
     )
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_authors_keyboard())
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_groups_keyboard())
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
         "❓ <b>Помощь</b>\n\n"
-        "1) Выбери автора\n"
-        "2) Пиши вопрос\n"
-        "3) Кнопки снизу:\n"
+        "1) Выбери эпоху\n"
+        "2) Выбери автора\n"
+        "3) Пиши вопрос\n\n"
+        "Кнопки снизу:\n"
         "   • 👥 смена автора\n"
         "   • 🔄 новый диалог\n"
         "   • 🆚 сравнение\n"
@@ -75,17 +59,49 @@ async def cmd_help(message: Message):
     )
 
 
+# =========================
+# 📚 МЕНЮ ЭПОХ
+# =========================
+
+@router.callback_query(F.data == "groups_menu")
+async def groups_menu(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    db.reset_compare(user_id)
+    db.set_mode(user_id, None)
+
+    await callback.message.edit_text(
+        "👇 <b>Выберите эпоху:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_groups_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("group_"))
+async def group_selected(callback: CallbackQuery):
+    group_key = callback.data.split("_", 1)[1]
+    await callback.message.edit_text(
+        "👥 <b>Выберите автора:</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_authors_keyboard(group_key)
+    )
+    await callback.answer()
+
+
+# =========================
+# 👥 Смена автора
+# =========================
+
 @router.callback_query(F.data == "change_author")
 async def change_author(callback: CallbackQuery):
     user_id = callback.from_user.id
     db.reset_compare(user_id)
-    # при смене автора режим соавторства логично отключать
     db.set_mode(user_id, None)
 
     await callback.message.edit_text(
-        "👥 <b>Выберите автора:</b>",
+        "👇 <b>Выберите эпоху:</b>",
         parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
+        reply_markup=get_groups_keyboard()
     )
     await callback.answer()
 
@@ -93,9 +109,7 @@ async def change_author(callback: CallbackQuery):
 @router.callback_query(F.data == "reset_chat")
 async def reset_chat(callback: CallbackQuery):
     user_id = callback.from_user.id
-    # чистим только историю, автора сохраняем
     db.reset_dialog(user_id, keep_author=True)
-    # и выключаем режимы
     db.set_mode(user_id, None)
 
     await callback.message.edit_text(
@@ -108,9 +122,6 @@ async def reset_chat(callback: CallbackQuery):
 
 @router.callback_query(F.data == "clear_all")
 async def clear_all(callback: CallbackQuery):
-    """
-    Полная очистка: никаких кнопок, только /start
-    """
     user_id = callback.from_user.id
     db.clear_all(user_id)
 
@@ -119,14 +130,12 @@ async def clear_all(callback: CallbackQuery):
         "Чтобы начать заново, нажмите:\n\n"
         "<code>/start</code>",
         parse_mode=ParseMode.HTML
-        # reply_markup НЕ ДАЁМ -> кнопок не будет
     )
     await callback.answer("Очищено")
 
 
 @router.callback_query(F.data == "main_menu")
 async def main_menu(callback: CallbackQuery):
-    # выход из спец-режимов при возврате в меню
     user_id = callback.from_user.id
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
@@ -146,14 +155,13 @@ async def cowrite_start(callback: CallbackQuery):
 
     if not user_data.get("selected_author"):
         await callback.message.edit_text(
-            "❌ Сначала выбери автора — он будет соавтором.\n\n👇 Выбери автора:",
+            "❌ Сначала выбери автора.\n\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_groups_keyboard()
         )
         await callback.answer()
         return
 
-    # сбрасываем сравнение, включаем выбор режима соавторства
     db.reset_compare(user_id)
 
     await callback.message.edit_text(
@@ -168,7 +176,7 @@ async def cowrite_start(callback: CallbackQuery):
 @router.callback_query(F.data.in_({"cowrite_prose", "cowrite_poem"}))
 async def cowrite_mode_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
-    mode = callback.data  # cowrite_prose / cowrite_poem
+    mode = callback.data
 
     db.set_mode(user_id, mode)
 
@@ -194,21 +202,20 @@ async def cb_compare_authors(callback: CallbackQuery):
 
     if not user_data.get("selected_author"):
         await callback.message.edit_text(
-            "❌ Сначала выбери автора для диалога (он будет «голосом» сравнения).\n\n👇 Выбери автора:",
+            "❌ Сначала выбери автора для диалога (он будет «голосом» сравнения).\n\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_groups_keyboard()
         )
         await callback.answer()
         return
 
-    # при сравнении выключаем соавторство, чтобы не пересекались режимы
     db.set_mode(user_id, "compare_first")
     db.set_compare_first_author(user_id, None)
 
     await callback.message.edit_text(
-        "🆚 <b>СРАВНЕНИЕ АВТОРОВ</b>\n\nВыбери <b>первого</b> автора:",
+        "🆚 <b>СРАВНЕНИЕ АВТОРОВ</b>\n\nВыберите эпоху первого автора:",
         parse_mode=ParseMode.HTML,
-        reply_markup=get_authors_keyboard()
+        reply_markup=get_groups_keyboard()
     )
     await callback.answer()
 
@@ -225,7 +232,6 @@ async def author_selected(callback: CallbackQuery):
     user_data = db.get_user_data(user_id)
     mode = user_data.get("mode")
 
-    # ----- режим сравнения -----
     if mode == "compare_first":
         db.set_compare_first_author(user_id, author_key)
         db.set_mode(user_id, "compare_second")
@@ -233,9 +239,9 @@ async def author_selected(callback: CallbackQuery):
         await callback.message.edit_text(
             f"🆚 <b>СРАВНЕНИЕ АВТОРОВ</b>\n\n"
             f"Первый выбран: <b>{get_author(author_key).get('name', author_key)}</b>\n\n"
-            f"Теперь выбери <b>второго</b> автора:",
+            f"Теперь выберите эпоху второго автора:",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_groups_keyboard()
         )
         await callback.answer("Первый выбран")
         return
@@ -247,9 +253,9 @@ async def author_selected(callback: CallbackQuery):
         if not first:
             db.set_mode(user_id, "compare_first")
             await callback.message.edit_text(
-                "⚠️ Потерял выбор первого автора. Выбери первого автора заново:",
+                "⚠️ Потерял выбор первого автора. Выберите эпоху первого автора заново:",
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_authors_keyboard()
+                reply_markup=get_groups_keyboard()
             )
             await callback.answer()
             return
@@ -282,9 +288,7 @@ async def author_selected(callback: CallbackQuery):
         await callback.answer("Готово")
         return
 
-    # ----- обычный выбор автора -----
     user_data["selected_author"] = author_key
-    # выбор автора логично выключает соавторство, если было
     db.save_user_data(user_id, user_data)
     db.set_mode(user_id, None)
     db.reset_compare(user_id)
@@ -310,29 +314,25 @@ async def handle_message(message: Message):
     user_data = db.get_user_data(user_id)
     mode = user_data.get("mode")
 
-    # если пользователь в режиме сравнения — просим выбрать кнопками
     if mode in ("compare_first", "compare_second"):
         await message.answer(
-            "🆚 Вы в режиме сравнения. Выберите автора кнопками 👇",
+            "🆚 Вы в режиме сравнения. Выбирайте авторов кнопками 👇",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_groups_keyboard()
         )
         return
 
     author_key = user_data.get("selected_author")
     if not author_key:
         await message.answer(
-            "❌ <b>Сначала выберите автора!</b>",
+            "❌ <b>Сначала выберите автора!</b>\n\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
-            reply_markup=get_authors_keyboard()
+            reply_markup=get_groups_keyboard()
         )
         return
 
     author = get_author(author_key)
 
-    # =========================
-    # ✍️ СОАВТОРСТВО: продолжаем текст
-    # =========================
     if mode in ("cowrite_prose", "cowrite_poem"):
         genre = "рассказ" if mode == "cowrite_prose" else "стихотворение"
 
@@ -357,7 +357,7 @@ async def handle_message(message: Message):
             response = await gigachat_client.generate_response(
                 author_key=author_key,
                 user_message=prompt,
-                conversation_history=[]  # чтобы не мешало
+                conversation_history=[]
             )
 
             try:
@@ -388,9 +388,6 @@ async def handle_message(message: Message):
             )
             return
 
-    # =========================
-    # 💬 Обычный режим: вопрос-ответ
-    # =========================
     thinking = await message.answer(
         f"<i>✨ {author.get('name', author_key)} обдумывает ответ...</i>",
         parse_mode=ParseMode.HTML
@@ -435,16 +432,12 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
-    # антифлуд
     limiter = InMemoryRateLimiter(RateLimitConfig())
     dp.message.middleware(AntiFloodMiddleware(limiter))
 
     dp.include_router(router)
 
-    # ✅ жёсткий сброс перед polling (решает большинство конфликтов)
-    await hard_reset_telegram(bot)
-
-    # старт
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 
