@@ -1,31 +1,38 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from authors import list_author_keys, get_author
+from authors import (
+    list_group_keys,
+    get_group_title,
+    list_author_keys_by_group,
+    get_author,
+)
 
 
-def get_authors_keyboard() -> InlineKeyboardMarkup:
-    """
-    Динамическая клавиатура авторов:
-    - берём ключи из authors.py
-    - отображаем name каждого автора
-    - callback_data = author_<key>
-    """
+def get_groups_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
-    keys = list_author_keys()
+    for g in list_group_keys():
+        builder.button(text=get_group_title(g), callback_data=f"group_{g}")
 
-    # Чтобы "ГИГАЧАД" был в конце (если он есть)
-    if "gigachad" in keys:
-        keys = [k for k in keys if k != "gigachad"] + ["gigachad"]
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_authors_keyboard(group_key: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    keys = list_author_keys_by_group(group_key)
 
     for key in keys:
         a = get_author(key) or {}
-        title = a.get("name", key)
-        builder.button(text=title, callback_data=f"author_{key}")
+        builder.button(text=a.get("name", key), callback_data=f"author_{key}")
 
-    # 2 кнопки в ряд (можешь поставить 3 если хочешь компактнее)
     builder.adjust(2)
+
+    builder.row()
+    builder.button(text="🔙 Назад к эпохам", callback_data="groups_menu")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 
