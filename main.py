@@ -19,6 +19,26 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
+# =========================
+# 🧹 ЖЁСТКИЙ СБРОС Telegram "хвостов"
+# =========================
+async def hard_reset_telegram(bot: Bot) -> None:
+    """
+    Иногда Telegram оставляет "хвост" предыдущего polling,
+    из-за чего появляется Conflict: terminated by other getUpdates request.
+    Этот сброс помогает "обнулить" состояние перед запуском.
+    """
+    try:
+        # 1) Убиваем вебхук и сносим накопленные апдейты
+        await bot.delete_webhook(drop_pending_updates=True)
+        # Небольшая пауза — реально помогает на некоторых хостингах
+        await asyncio.sleep(0.5)
+        # 2) Повторяем ещё раз — добиваем хвосты
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        logger.warning("hard_reset_telegram: не удалось полностью сбросить состояние: %s", e)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
@@ -415,12 +435,16 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
+    # антифлуд
     limiter = InMemoryRateLimiter(RateLimitConfig())
     dp.message.middleware(AntiFloodMiddleware(limiter))
 
     dp.include_router(router)
 
-    await bot.delete_webhook(drop_pending_updates=True)
+    # ✅ жёсткий сброс перед polling (решает большинство конфликтов)
+    await hard_reset_telegram(bot)
+
+    # старт
     await dp.start_polling(bot)
 
 
