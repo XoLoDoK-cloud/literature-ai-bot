@@ -3,28 +3,25 @@ import os
 import json
 import time
 import asyncio
-from typing import Set
+from typing import Set, List
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 ADMIN_ROUTER = Router()
-START_TS = time.time()
+_START_TS = time.time()
 
 
-# =========================
-# ВСПОМОГАТЕЛЬНОЕ
-# =========================
-def _data_dir():
+def _data_dir() -> str:
     path = os.path.join(os.getcwd(), "data")
     os.makedirs(path, exist_ok=True)
     return path
 
 
-def _load(path, default):
+def _load(path: str, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -32,175 +29,214 @@ def _load(path, default):
         return default
 
 
-def _save(path, data):
+def _save(path: str, obj) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(obj, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
 
-def _admins() -> Set[int]:
-    raw = os.getenv("ADMIN_IDS", "")
-    return {int(x) for x in raw.split(",") if x.strip().isdigit()}
+def _admins_from_env() -> Set[int]:
+    raw = os.getenv("ADMIN_IDS", "").strip()
+    if not raw:
+        return set()
+    out = set()
+    for p in raw.split(","):
+        p = p.strip()
+        if p.isdigit():
+            out.add(int(p))
+    return out
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in _admins()
+    return int(user_id) in _admins_from_env()
 
 
-# =========================
-# ПОЛЬЗОВАТЕЛИ / БАН
-# =========================
-def users_path():
+def _users_path() -> str:
     return os.path.join(_data_dir(), "users.json")
 
 
-def banned_path():
+def _banned_path() -> str:
     return os.path.join(_data_dir(), "banned.json")
 
 
-def track_user(user_id: int):
-    data = _load(users_path(), {"users": []})
-    if user_id not in data["users"]:
-        data["users"].append(user_id)
-        _save(users_path(), data)
+def track_user(user_id: int) -> None:
+    data = _load(_users_path(), {"users": []})
+    users = set(int(x) for x in data.get("users", []) if str(x).isdigit())
+    if int(user_id) not in users:
+        users.add(int(user_id))
+        _save(_users_path(), {"users": sorted(list(users))})
 
 
-def all_users():
-    return _load(users_path(), {"users": []})["users"]
+def get_all_users() -> List[int]:
+    data = _load(_users_path(), {"users": []})
+    res = []
+    for x in data.get("users", []):
+        try:
+            res.append(int(x))
+        except Exception:
+            pass
+    return sorted(list(set(res)))
 
 
-def banned_users():
-    return set(_load(banned_path(), {"banned": []})["banned"])
+def get_banned() -> Set[int]:
+    data = _load(_banned_path(), {"banned": []})
+    res = set()
+    for x in data.get("banned", []):
+        try:
+            res.add(int(x))
+        except Exception:
+            pass
+    return res
 
 
-def ban_user(uid: int):
-    data = _load(banned_path(), {"banned": []})
-    if uid not in data["banned"]:
-        data["banned"].append(uid)
-        _save(banned_path(), data)
+def is_banned(user_id: int) -> bool:
+    return int(user_id) in get_banned()
 
 
-def unban_user(uid: int):
-    data = _load(banned_path(), {"banned": []})
-    if uid in data["banned"]:
-        data["banned"].remove(uid)
-        _save(banned_path(), data)
+def ban_user(user_id: int) -> None:
+    banned = get_banned()
+    banned.add(int(user_id))
+    _save(_banned_path(), {"banned": sorted(list(banned))})
 
 
-def is_banned(uid: int) -> bool:
-    return uid in banned_users()
+def unban_user(user_id: int) -> None:
+    banned = get_banned()
+    banned.discard(int(user_id))
+    _save(_banned_path(), {"banned": sorted(list(banned))})
 
 
-# =========================
-# АДМИН-КОМАНДЫ
-# =========================
+def _uptime() -> str:
+    sec = int(time.time() - _START_TS)
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+async def _send_safe(bot, chat_id: int, text: str) -> bool:
+    try:
+        await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+        return True
+    except (TelegramForbiddenError, TelegramBadRequest):
+        return False
+    except Exception:
+        return False
+
+
+# ----------------------------
+# Команды
+# ----------------------------
 @ADMIN_ROUTER.message(Command("whoami"))
-async def whoami(message: Message):
+async def cmd_whoami(message: Message):
     track_user(message.from_user.id)
-    await message.answer(
-        f"🆔 Ваш ID: <code>{message.from_user.id}</code>",
-        parse_mode=ParseMode.HTML
-    )
+    await message.answer(f"🆔 Ваш ID: <code>{message.from_user.id}</code>", parse_mode=ParseMode.HTML)
 
 
 @ADMIN_ROUTER.message(Command("admin"))
-async def admin_panel(message: Message):
+async def cmd_admin(message: Message):
     track_user(message.from_user.id)
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer("⛔ У вас нет доступа к админ-командам.")
         return
 
     await message.answer(
-        "🛠 <b>АДМИН-ПАНЕЛЬ</b>\n\n"
-        "Команды:\n"
-        "/stats — статистика\n"
-        "/broadcast ТЕКСТ — рассылка\n"
-        "/ban USER_ID — бан\n"
-        "/unban USER_ID — разбан\n"
-        "/whoami — узнать ID",
+        "🛠 <b>Админ-команды</b>\n\n"
+        "• <code>/stats</code> — статистика\n"
+        "• <code>/broadcast ТЕКСТ</code> — рассылка\n"
+        "• <code>/ban USER_ID</code> — бан\n"
+        "• <code>/unban USER_ID</code> — разбан\n"
+        "• <code>/whoami</code> — узнать свой ID\n",
         parse_mode=ParseMode.HTML
     )
 
 
 @ADMIN_ROUTER.message(Command("stats"))
-async def stats(message: Message):
+async def cmd_stats(message: Message):
     track_user(message.from_user.id)
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer("⛔ Нет доступа.")
         return
 
-    uptime = int(time.time() - START_TS)
+    users = get_all_users()
+    banned = get_banned()
+
     await message.answer(
-        "📊 <b>СТАТИСТИКА</b>\n\n"
-        f"👥 Пользователей: <b>{len(all_users())}</b>\n"
-        f"🚫 В бане: <b>{len(banned_users())}</b>\n"
-        f"⏱ Аптайм: <b>{uptime // 3600}ч {(uptime % 3600) // 60}м</b>",
+        "📊 <b>Статистика</b>\n\n"
+        f"👥 Пользователей: <b>{len(users)}</b>\n"
+        f"🚫 В бане: <b>{len(banned)}</b>\n"
+        f"⏱ Аптайм: <b>{_uptime()}</b>",
         parse_mode=ParseMode.HTML
     )
 
 
 @ADMIN_ROUTER.message(Command("ban"))
-async def ban(message: Message):
+async def cmd_ban(message: Message):
     track_user(message.from_user.id)
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer("⛔ Нет доступа.")
         return
 
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Использование: /ban USER_ID")
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Использование: <code>/ban USER_ID</code>", parse_mode=ParseMode.HTML)
         return
 
-    ban_user(int(parts[1]))
-    await message.answer("🚫 Пользователь заблокирован")
+    uid = int(parts[1])
+    ban_user(uid)
+    await message.answer(f"🚫 Пользователь <code>{uid}</code> забанен.", parse_mode=ParseMode.HTML)
 
 
 @ADMIN_ROUTER.message(Command("unban"))
-async def unban(message: Message):
+async def cmd_unban(message: Message):
     track_user(message.from_user.id)
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer("⛔ Нет доступа.")
         return
 
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await message.answer("Использование: /unban USER_ID")
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Использование: <code>/unban USER_ID</code>", parse_mode=ParseMode.HTML)
         return
 
-    unban_user(int(parts[1]))
-    await message.answer("✅ Пользователь разблокирован")
+    uid = int(parts[1])
+    unban_user(uid)
+    await message.answer(f"✅ Пользователь <code>{uid}</code> разбанен.", parse_mode=ParseMode.HTML)
 
 
 @ADMIN_ROUTER.message(Command("broadcast"))
-async def broadcast(message: Message):
+async def cmd_broadcast(message: Message):
     track_user(message.from_user.id)
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer("⛔ Нет доступа.")
         return
 
-    text = message.text.replace("/broadcast", "", 1).strip()
-    if not text:
-        await message.answer("Использование: /broadcast ТЕКСТ")
+    payload = (message.text or "").replace("/broadcast", "", 1).strip()
+    if not payload:
+        await message.answer("Использование: <code>/broadcast ТЕКСТ</code>", parse_mode=ParseMode.HTML)
         return
 
-    ok, fail = 0, 0
-    for uid in all_users():
-        if is_banned(uid):
+    users = get_all_users()
+    banned = get_banned()
+
+    ok = 0
+    fail = 0
+
+    await message.answer(f"📣 Начинаю рассылку… Пользователей: <b>{len(users)}</b>", parse_mode=ParseMode.HTML)
+
+    for uid in users:
+        if uid in banned:
             continue
-        try:
-            await message.bot.send_message(
-                uid,
-                f"📣 <b>Сообщение от администратора</b>\n\n{text}",
-                parse_mode=ParseMode.HTML
-            )
+        sent = await _send_safe(message.bot, uid, f"📣 <b>Сообщение от администратора</b>\n\n{payload}")
+        if sent:
             ok += 1
-            await asyncio.sleep(0.05)
-        except (TelegramForbiddenError, TelegramBadRequest):
+        else:
             fail += 1
+        await asyncio.sleep(0.05)
 
     await message.answer(
-        f"✅ Рассылка завершена\n\n"
-        f"Отправлено: {ok}\n"
-        f"Ошибок: {fail}"
+        "✅ <b>Рассылка завершена</b>\n\n"
+        f"Отправлено: <b>{ok}</b>\n"
+        f"Не доставлено: <b>{fail}</b>",
+        parse_mode=ParseMode.HTML
     )
