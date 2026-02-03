@@ -66,3 +66,24 @@ def get_back_to_chat_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="⬅️ В обычный диалог", callback_data="back_to_chat"))
     return builder.as_markup()
+
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardButton
+
+
+def get_admin_keyboard():
+    kb = InlineKeyboardBuilder()
+
+    kb.row(
+        InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
+        InlineKeyboardButton(text="📣 Рассылка", callback_data="admin_broadcast_help"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="🚫 Забанить", callback_data="admin_ban_help"),
+        InlineKeyboardButton(text="✅ Разбанить", callback_data="admin_unban_help"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="🧹 Очистить чат", callback_data="admin_clear_chat"),
+    )
+
+    return kb.as_markup()
