@@ -1,5 +1,4 @@
 import os
-import re
 import asyncio
 import logging
 
@@ -9,8 +8,6 @@ from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums import ParseMode
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardButton
 
 from config import BOT_TOKEN
 from database import db
@@ -25,6 +22,9 @@ from inline_keyboards import (
 from gigachat_client import gigachat_client
 from rate_limit import RateLimitConfig, InMemoryRateLimiter, AntiFloodMiddleware
 
+# ✅ ВАЖНО: новый модуль распознавания
+from recognition import guess_authors_from_text, build_quick_author_keyboard
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ router = Router()
 
 
 # =========================
-# 🌐 Мини-сервер, чтобы хостинг видел открытый порт
+# 🌐 Мини-сервер, чтобы Render видел открытый порт
 # =========================
 async def start_web_server() -> None:
     async def health(_request: web.Request) -> web.Response:
@@ -53,245 +53,7 @@ async def start_web_server() -> None:
 
 
 # =========================
-# 🔎 Нормализация текста для поиска совпадений
-# =========================
-def _norm(s: str) -> str:
-    s = (s or "").lower().replace("ё", "е")
-    s = re.sub(r"[«»\"'`]", " ", s)
-    s = re.sub(r"[^a-zа-я0-9\s\-]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def _contains_phrase(text_norm: str, phrase_norm: str) -> bool:
-    # безопасная проверка "как фраза" (границы слов)
-    # работает даже если в названии есть тире
-    pattern = r"(?:^|\s)" + re.escape(phrase_norm) + r"(?:$|\s)"
-    return re.search(pattern, text_norm) is not None or phrase_norm in text_norm
-
-
-# =========================
-# 🧠 Широкое распознавание автора по произведению/автору
-# Максимально широко, но "без рисков":
-# - НЕ выбираем автора автоматически
-# - только предлагаем 1–3 кандидата кнопками
-# =========================
-AUTHOR_NAME_HINTS = {
-    # фамилии/имена -> ключ автора
-    "пушкин": "pushkin",
-    "александр пушкин": "pushkin",
-    "лермонтов": "lermontov",
-    "гоголь": "gogol",
-    "достоевск": "dostoevsky",
-    "толстой": "tolstoy",
-    "лев толстой": "tolstoy",
-    "чехов": "chekhov",
-    "тургенев": "turgenev",
-    "ахматов": "akhmatova",
-    "блок": "blok",
-    "есенин": "yesenin",
-    "маяковск": "mayakovsky",
-    "цветаев": "tsvetaeva",
-    "мандельштам": "mandelshtam",
-    "пастернак": "pasternak",
-    "булгаков": "bulgakov",
-    "шолохов": "sholokhov",
-    "солженицын": "solzhenitsyn",
-    "бродск": "brodsky",
-    "высоцк": "vysotsky",
-    "филатов": "filatov",
-    "пелевин": "pelevin",
-    "улицкая": "ulitskaya",
-}
-
-# Название произведения -> автор
-# Добавил много школьной программы + популярные варианты написания.
-WORK_TO_AUTHOR = {
-    # Пушкин
-    "капитанская дочка": "pushkin",
-    "евгений онегин": "pushkin",
-    "пиковая дама": "pushkin",
-    "борис годунов": "pushkin",
-    "дубровский": "pushkin",
-    "повести белкина": "pushkin",
-    "сказка о рыбаке и рыбке": "pushkin",
-    "сказка о царе салтане": "pushkin",
-    "сказка о мертвой царевне и семи богатырях": "pushkin",
-    "медный всадник": "pushkin",
-
-    # Лермонтов
-    "герой нашего времени": "lermontov",
-    "мцыри": "lermontov",
-    "демон": "lermontov",
-    "парус": "lermontov",
-    "бородино": "lermontov",
-
-    # Гоголь
-    "шинель": "gogol",
-    "ревизор": "gogol",
-    "мертвые души": "gogol",
-    "повесть о том как поссорился иван иванович с иваном никифоровичем": "gogol",
-    "нос": "gogol",
-    "тартюф": "gogol",  # (на всякий) но это Мольер — чтобы не рисковать, ниже мы фильтруем сомнительные совпадения
-    "вий": "gogol",
-    "вечера на хуторе близ диканьки": "gogol",
-    "тарас бульба": "gogol",
-
-    # Достоевский
-    "преступление и наказание": "dostoevsky",
-    "братья карамазовы": "dostoevsky",
-    "идиот": "dostoevsky",
-    "бесы": "dostoevsky",
-    "униженные и оскорбленные": "dostoevsky",
-    "записки из подполья": "dostoevsky",
-
-    # Толстой
-    "война и мир": "tolstoy",
-    "анна каренина": "tolstoy",
-    "воскресение": "tolstoy",
-    "детство": "tolstoy",
-    "отрочество": "tolstoy",
-    "юность": "tolstoy",
-    "после бала": "tolstoy",
-    "холстомер": "tolstoy",
-    "кавказский пленник": "tolstoy",
-
-    # Чехов
-    "вишневый сад": "chekhov",
-    "вишнёвый сад": "chekhov",
-    "три сестры": "chekhov",
-    "палата 6": "chekhov",
-    "палата №6": "chekhov",
-    "человек в футляре": "chekhov",
-    "хамелеон": "chekhov",
-    "толстый и тонкий": "chekhov",
-    "дама с собачкой": "chekhov",
-
-    # Тургенев
-    "отцы и дети": "turgenev",
-    "записки охотника": "turgenev",
-    "дворянское гнездо": "turgenev",
-    "ася": "turgenev",
-    "му-му": "turgenev",
-
-    # Ахматова
-    "реквием": "akhmatova",
-    "поэма без героя": "akhmatova",
-
-    # Блок
-    "двенадцать": "blok",
-    "незнакомка": "blok",
-
-    # Есенин
-    "исповедь хулигана": "yesenin",
-    "персидские мотивы": "yesenin",
-
-    # Маяковский
-    "облако в штанах": "mayakovsky",
-    "флейта позвоночник": "mayakovsky",
-    "флейта-позвоночник": "mayakovsky",
-
-    # Цветаева
-    "мне нравится что вы больны не мной": "tsvetaeva",  # часто ищут строкой
-    "кто создан из камня кто создан из глины": "tsvetaeva",
-
-    # Пастернак
-    "доктор живаго": "pasternak",
-
-    # Булгаков
-    "мастер и маргарита": "bulgakov",
-    "собачье сердце": "bulgakov",
-    "белая гвардия": "bulgakov",
-
-    # Шолохов
-    "тихий дон": "sholokhov",
-    "судьба человека": "sholokhov",
-
-    # Солженицын
-    "один день ивана денисовича": "solzhenitsyn",
-    "архипелаг гулаг": "solzhenitsyn",
-
-    # Филатов
-    "про федота стрельца удалого молодца": "filatov",
-    "про федота стрельца": "filatov",
-}
-
-# Сомнительные / пересекающиеся слова, чтобы не ловить "ложные" совпадения
-# (например, очень короткие заголовки типа "Ася" могут совпадать случайно)
-SHORT_TITLES_RISK = {"ася", "нос", "вий", "парус", "бородино"}
-
-
-def guess_authors_from_text(user_text: str):
-    """
-    Возвращает список кандидатов:
-    [{"author_key": "...", "reason": "...", "score": int}]
-    """
-    text_norm = _norm(user_text)
-    candidates = {}
-
-    # 1) По автору (фамилия в тексте) — самый надёжный сигнал
-    for hint, akey in AUTHOR_NAME_HINTS.items():
-        hint_norm = _norm(hint)
-        if hint_norm and _contains_phrase(text_norm, hint_norm):
-            candidates[akey] = max(candidates.get(akey, 0), 100)
-
-    # 2) По произведению — широко, но аккуратно
-    for title, akey in WORK_TO_AUTHOR.items():
-        tnorm = _norm(title)
-        if not tnorm:
-            continue
-
-        # если заголовок "опасно короткий" — требуем точное совпадение фразой
-        if tnorm in SHORT_TITLES_RISK:
-            if _contains_phrase(text_norm, tnorm):
-                candidates[akey] = max(candidates.get(akey, 0), 80)
-            continue
-
-        # обычный случай: подстрока + длина заголовка
-        if tnorm in text_norm:
-            # чем длиннее и точнее заголовок — тем выше балл
-            score = 60 + min(len(tnorm), 40)
-            candidates[akey] = max(candidates.get(akey, 0), score)
-
-    # соберём и отсортируем
-    res = []
-    for akey, score in candidates.items():
-        name = get_author(akey).get("name", akey)
-        # причина:
-        reason = "узнал автора по фамилии/упоминанию" if score >= 100 else "похоже по названию произведения"
-        res.append({"author_key": akey, "author_name": name, "reason": reason, "score": score})
-
-    res.sort(key=lambda x: x["score"], reverse=True)
-
-    # ограничим 3 лучшими, чтобы не шуметь
-    return res[:3]
-
-
-def build_quick_author_keyboard(candidates):
-    """
-    Клавиатура:
-    ✅ Ответить как <Автор1>
-    ✅ Ответить как <Автор2> (если есть)
-    ...
-    🔁 Выбрать автора вручную
-    """
-    kb = InlineKeyboardBuilder()
-
-    for c in candidates:
-        kb.row(
-            InlineKeyboardButton(
-                text=f"✅ Ответить как {c['author_name']}",
-                callback_data=f"quick_author_{c['author_key']}"
-            )
-        )
-
-    kb.row(InlineKeyboardButton(text="🔁 Выбрать автора вручную", callback_data="groups_menu"))
-    kb.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="main_menu"))
-    return kb.as_markup()
-
-
-# =========================
-# 🤖 Команды / UI
+# 🤖 Команды
 # =========================
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -324,7 +86,7 @@ async def cmd_help(message: Message):
         "1) Выбери эпоху\n"
         "2) Выбери автора\n"
         "3) Пиши вопрос\n\n"
-        "Кнопки внизу открывают режимы:\n"
+        "Кнопки внизу:\n"
         "📝 Разбор текста / 🎓 ЕГЭ / 💬 Диалог авторов\n\n"
         "Команда: /start — начать заново.",
         parse_mode=ParseMode.HTML
@@ -332,7 +94,7 @@ async def cmd_help(message: Message):
 
 
 # =========================
-# 🔘 Навигация по эпохам/авторам
+# 🔘 Навигация
 # =========================
 @router.callback_query(F.data == "groups_menu")
 async def groups_menu(callback: CallbackQuery):
@@ -406,8 +168,7 @@ async def clear_all(callback: CallbackQuery):
 
     await callback.message.edit_text(
         "🧹 <b>Чат полностью очищен.</b>\n\n"
-        "Чтобы начать заново, нажмите:\n\n"
-        "<code>/start</code>",
+        "Чтобы начать заново:\n<code>/start</code>",
         parse_mode=ParseMode.HTML
     )
     await callback.answer("Очищено")
@@ -430,7 +191,7 @@ async def main_menu(callback: CallbackQuery):
 
 
 # =========================
-# ✅ НОВОЕ: быстрый выбор автора по вопросу
+# ✅ Быстрый выбор автора
 # =========================
 @router.callback_query(F.data.startswith("quick_author_"))
 async def quick_author_selected(callback: CallbackQuery):
@@ -449,7 +210,6 @@ async def quick_author_selected(callback: CallbackQuery):
 
     author = get_author(author_key)
 
-    # Если есть сохранённый вопрос — сразу отвечаем на него
     if pending:
         thinking = await callback.message.answer(
             f"<i>✨ {author.get('name', author_key)} отвечает на ваш вопрос…</i>",
@@ -479,7 +239,7 @@ async def quick_author_selected(callback: CallbackQuery):
             except Exception:
                 pass
             await callback.message.answer(
-                "⚠️ Не получилось ответить. Попробуйте ещё раз.",
+                "⚠️ Не получилось ответить. Попробуй ещё раз.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_chat_keyboard()
             )
@@ -487,7 +247,6 @@ async def quick_author_selected(callback: CallbackQuery):
         await callback.answer("Готово")
         return
 
-    # Иначе просто подтверждаем выбор
     await callback.message.answer(
         f"✅ Выбран автор: <b>{author.get('name', author_key)}</b>\n\n"
         "Теперь напиши вопрос — отвечу в его стиле.",
@@ -515,10 +274,8 @@ async def cowrite_start(callback: CallbackQuery):
         return
 
     db.reset_compare(user_id)
-
     await callback.message.edit_text(
-        "✍️ <b>СОАВТОРСТВО</b>\n\n"
-        "Что будем писать вместе?",
+        "✍️ <b>СОАВТОРСТВО</b>\n\nЧто будем писать вместе?",
         parse_mode=ParseMode.HTML,
         reply_markup=get_cowrite_mode_keyboard()
     )
@@ -528,57 +285,26 @@ async def cowrite_start(callback: CallbackQuery):
 @router.callback_query(F.data.in_({"cowrite_prose", "cowrite_poem"}))
 async def cowrite_mode_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
-    mode = callback.data
-    db.set_mode(user_id, mode)
+    db.set_mode(user_id, callback.data)
 
-    genre = "рассказ" if mode == "cowrite_prose" else "стихотворение"
+    genre = "рассказ" if callback.data == "cowrite_prose" else "стихотворение"
     await callback.message.edit_text(
         "✍️ <b>Начинаем!</b>\n\n"
         f"Жанр: <b>{genre}</b>\n\n"
         "Напиши <b>первый фрагмент</b> — я продолжу.\n"
-        "<i>Подсказка: 2–6 строк достаточно.</i>",
+        "<i>2–6 строк достаточно.</i>",
         parse_mode=ParseMode.HTML
     )
     await callback.answer("Режим включён")
 
 
 # =========================
-# 🆚 Сравнение авторов (как было)
-# =========================
-@router.callback_query(F.data == "compare_authors")
-async def cb_compare_authors(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    user_data = db.get_user_data(user_id)
-
-    if not user_data.get("selected_author"):
-        await callback.message.edit_text(
-            "❌ Сначала выбери автора для диалога.\n\n👇 Выберите эпоху:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_groups_keyboard()
-        )
-        await callback.answer()
-        return
-
-    db.set_mode(user_id, "compare_first")
-    db.set_compare_first_author(user_id, None)
-
-    await callback.message.edit_text(
-        "🆚 <b>СРАВНЕНИЕ АВТОРОВ</b>\n\nВыберите эпоху первого автора:",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_groups_keyboard()
-    )
-    await callback.answer()
-
-
-# =========================
-# ✅ НОВОЕ: Режимы 1/2/3
+# ✅ Режимы 1/2/3 (как у тебя)
 # =========================
 @router.callback_query(F.data == "mode_analysis")
 async def mode_analysis(callback: CallbackQuery):
     user_id = callback.from_user.id
-    user_data = db.get_user_data(user_id)
-
-    if not user_data.get("selected_author"):
+    if not db.get_user_data(user_id).get("selected_author"):
         await callback.message.edit_text(
             "❌ Сначала выбери автора.\n\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
@@ -588,16 +314,9 @@ async def mode_analysis(callback: CallbackQuery):
         return
 
     db.set_mode(user_id, "analysis_text")
-
     await callback.message.edit_text(
         "📝 <b>ЛИТЕРАТУРНЫЙ РАЗБОР</b>\n\n"
-        "Пришли текст (стих/прозу/сочинение).\n"
-        "Я сделаю разбор:\n"
-        "• тема и идея\n"
-        "• настроение\n"
-        "• образы и средства\n"
-        "• сильные места и что улучшить\n\n"
-        "<i>Можно присылать хоть 3 строки, хоть большой отрывок.</i>",
+        "Пришли текст (стих/прозу/сочинение) — разберу по пунктам.",
         parse_mode=ParseMode.HTML,
         reply_markup=get_back_to_chat_keyboard()
     )
@@ -607,9 +326,7 @@ async def mode_analysis(callback: CallbackQuery):
 @router.callback_query(F.data == "mode_ege")
 async def mode_ege(callback: CallbackQuery):
     user_id = callback.from_user.id
-    user_data = db.get_user_data(user_id)
-
-    if not user_data.get("selected_author"):
+    if not db.get_user_data(user_id).get("selected_author"):
         await callback.message.edit_text(
             "❌ Сначала выбери автора.\n\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
@@ -619,18 +336,10 @@ async def mode_ege(callback: CallbackQuery):
         return
 
     db.set_mode(user_id, "ege_mode")
-
     await callback.message.edit_text(
         "🎓 <b>ЕГЭ-РЕЖИМ</b>\n\n"
-        "Напиши, что нужно:\n"
-        "• план сочинения\n"
-        "• тезис + аргументы\n"
-        "• подбор примеров\n"
-        "• сравнение героев / тем\n\n"
-        "⚠️ Я НЕ пишу полностью готовое сочинение за тебя.\n"
-        "Я даю структуру и сильные формулировки.\n\n"
-        "<i>Пример:</i>\n"
-        "«Составь план и тезисы по теме: что такое честь в “Капитанской дочке”»",
+        "Напиши запрос: план, тезис, аргументы, примеры.\n"
+        "⚠️ Я не пишу полностью готовое сочинение за тебя — даю структуру и формулировки.",
         parse_mode=ParseMode.HTML,
         reply_markup=get_back_to_chat_keyboard()
     )
@@ -644,7 +353,7 @@ async def mode_dialog(callback: CallbackQuery):
 
     if not user_data.get("selected_author"):
         await callback.message.edit_text(
-            "❌ Сначала выбери автора (он будет твоим “основным голосом”).\n\n👇 Выберите эпоху:",
+            "❌ Сначала выбери автора (он будет основным голосом).\n\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
             reply_markup=get_groups_keyboard()
         )
@@ -656,11 +365,8 @@ async def mode_dialog(callback: CallbackQuery):
     db.save_user_data(user_id, user_data)
 
     db.set_mode(user_id, "dialog_first")
-
     await callback.message.edit_text(
-        "💬 <b>ДИАЛОГ АВТОРОВ</b>\n\n"
-        "Сначала выбери <b>первого автора</b>.\n"
-        "👇 Выберите эпоху:",
+        "💬 <b>ДИАЛОГ АВТОРОВ</b>\n\nСначала выбери <b>первого автора</b>.\n👇 Выберите эпоху:",
         parse_mode=ParseMode.HTML,
         reply_markup=get_groups_keyboard()
     )
@@ -669,12 +375,9 @@ async def mode_dialog(callback: CallbackQuery):
 
 @router.callback_query(F.data == "back_to_chat")
 async def back_to_chat(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    db.set_mode(user_id, None)
-
+    db.set_mode(callback.from_user.id, None)
     await callback.message.edit_text(
-        "✅ Вернулись в обычный диалог.\n\n"
-        "Пиши вопрос — я отвечу в стиле выбранного автора.",
+        "✅ Вернулись в обычный диалог.\n\nПиши вопрос — отвечу в стиле выбранного автора.",
         parse_mode=ParseMode.HTML,
         reply_markup=get_chat_keyboard()
     )
@@ -682,7 +385,7 @@ async def back_to_chat(callback: CallbackQuery):
 
 
 # =========================
-# 👤 Выбор автора + обработка спец-режимов выбора
+# 👤 Выбор автора
 # =========================
 @router.callback_query(F.data.startswith("author_"))
 async def author_selected(callback: CallbackQuery):
@@ -696,64 +399,7 @@ async def author_selected(callback: CallbackQuery):
     user_data = db.get_user_data(user_id)
     mode = user_data.get("mode")
 
-    # ---- сравнение авторов ----
-    if mode == "compare_first":
-        db.set_compare_first_author(user_id, author_key)
-        db.set_mode(user_id, "compare_second")
-
-        await callback.message.edit_text(
-            f"🆚 <b>СРАВНЕНИЕ АВТОРОВ</b>\n\n"
-            f"Первый выбран: <b>{get_author(author_key).get('name', author_key)}</b>\n\n"
-            f"Теперь выберите эпоху второго автора:",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_groups_keyboard()
-        )
-        await callback.answer("Первый выбран")
-        return
-
-    if mode == "compare_second":
-        first = user_data.get("compare_first_author")
-        second = author_key
-
-        if not first:
-            db.set_mode(user_id, "compare_first")
-            await callback.message.edit_text(
-                "⚠️ Потерял выбор первого автора. Выберите эпоху первого автора заново:",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_groups_keyboard()
-            )
-            await callback.answer()
-            return
-
-        if first == second:
-            await callback.answer("Нужно выбрать двух разных авторов", show_alert=True)
-            return
-
-        narrator = user_data.get("selected_author")
-        db.reset_compare(user_id)
-        db.set_mode(user_id, None)
-
-        await callback.message.edit_text("✨ <i>Сравниваю…</i>", parse_mode=ParseMode.HTML)
-
-        try:
-            compare_text = await gigachat_client.compare_authors(
-                narrator_author_key=narrator,
-                a1=first,
-                a2=second
-            )
-        except Exception as e:
-            logger.exception("Ошибка сравнения: %s", e)
-            compare_text = "⚠️ Не получилось сравнить авторов. Попробуйте ещё раз."
-
-        await callback.message.edit_text(
-            compare_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_chat_keyboard()
-        )
-        await callback.answer("Готово")
-        return
-
-    # ---- диалог авторов ----
+    # диалог авторов (если у тебя есть обработка — оставь как было)
     if mode == "dialog_first":
         user_data["dialog_first_author"] = author_key
         user_data["dialog_second_author"] = None
@@ -763,8 +409,7 @@ async def author_selected(callback: CallbackQuery):
         await callback.message.edit_text(
             f"💬 <b>ДИАЛОГ АВТОРОВ</b>\n\n"
             f"Первый выбран: <b>{get_author(author_key).get('name', author_key)}</b>\n\n"
-            f"Теперь выбери <b>второго автора</b>.\n"
-            "👇 Выберите эпоху:",
+            "Теперь выбери <b>второго автора</b>.\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
             reply_markup=get_groups_keyboard()
         )
@@ -778,7 +423,7 @@ async def author_selected(callback: CallbackQuery):
         if not first:
             db.set_mode(user_id, "dialog_first")
             await callback.message.edit_text(
-                "⚠️ Потерял выбор первого автора. Выберите его заново:\n👇 Выберите эпоху:",
+                "⚠️ Потерял выбор первого автора. Выберите заново:\n👇 Выберите эпоху:",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_groups_keyboard()
             )
@@ -798,26 +443,25 @@ async def author_selected(callback: CallbackQuery):
             f"Выбраны:\n"
             f"1) <b>{get_author(first).get('name', first)}</b>\n"
             f"2) <b>{get_author(second).get('name', second)}</b>\n\n"
-            "Теперь напиши <b>тему / вопрос</b>, о чём они будут говорить.\n\n"
-            "<i>Пример: «Что важнее: свобода или долг?»</i>",
+            "Теперь напиши <b>тему/вопрос</b>.",
             parse_mode=ParseMode.HTML,
             reply_markup=get_back_to_chat_keyboard()
         )
         await callback.answer("Выбран второй")
         return
 
-    # ---- обычный выбор автора ----
+    # обычный выбор автора
     user_data["selected_author"] = author_key
     user_data.pop("pending_question", None)
     db.save_user_data(user_id, user_data)
-    db.set_mode(user_id, None)
-    db.reset_compare(user_id)
 
+    db.set_mode(user_id, None)
     author = get_author(author_key)
+
     await callback.message.edit_text(
         f"{author.get('name', author_key)}\n\n"
         f"💬 {author.get('greeting','Здравствуйте!')}\n\n"
-        f"<i>Задавайте вопросы — отвечу в своём стиле!</i>",
+        "<i>Задавай вопросы — отвечу в своём стиле.</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_chat_keyboard()
     )
@@ -825,7 +469,7 @@ async def author_selected(callback: CallbackQuery):
 
 
 # =========================
-# 💬 Обработка текстовых сообщений
+# 💬 Текстовые сообщения
 # =========================
 @router.message(F.text)
 async def handle_message(message: Message):
@@ -836,31 +480,20 @@ async def handle_message(message: Message):
 
     user_data = db.get_user_data(user_id)
     mode = user_data.get("mode")
-
-    # если пользователь в выборе авторов по кнопкам
-    if mode in ("compare_first", "compare_second", "dialog_first", "dialog_second"):
-        await message.answer(
-            "🧩 Сейчас нужно выбирать кнопками 👇",
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_groups_keyboard()
-        )
-        return
-
     author_key = user_data.get("selected_author")
 
-    # ✅ НОВОЕ: если автор не выбран — пытаемся распознать и предложить варианты
+    # ✅ Умный fallback: если автор не выбран
     if not author_key:
-        candidates = guess_authors_from_text(user_text)
+        candidates = guess_authors_from_text(user_text, limit=3)
 
         if candidates:
-            # сохраняем вопрос, чтобы после нажатия кнопки сразу ответить
             user_data["pending_question"] = user_text
             db.save_user_data(user_id, user_data)
 
             lines = [
                 "🔎 <b>Похоже, вопрос связан с конкретным автором/произведением.</b>",
                 "Выбери, как отвечать:",
-                ""
+                "",
             ]
             for c in candidates:
                 lines.append(f"• <b>{c['author_name']}</b> — {c['reason']}")
@@ -872,7 +505,6 @@ async def handle_message(message: Message):
             )
             return
 
-        # если ничего надёжного не нашли — обычное поведение
         await message.answer(
             "❌ <b>Сначала выберите автора!</b>\n\n👇 Выберите эпоху:",
             parse_mode=ParseMode.HTML,
@@ -882,9 +514,7 @@ async def handle_message(message: Message):
 
     author = get_author(author_key)
 
-    # =========================
-    # 📝 РАЗБОР ТЕКСТА
-    # =========================
+    # 📝 Разбор
     if mode == "analysis_text":
         prompt = (
             "Сделай литературный разбор текста пользователя.\n"
@@ -895,17 +525,13 @@ async def handle_message(message: Message):
             "4) Композиция/ритм (если стихи)\n"
             "5) Сильные места\n"
             "6) Что улучшить (бережно)\n\n"
-            "Важно:\n"
-            "- НЕ выдумывай авторство текста\n"
-            "- Пиши понятно и структурировано\n\n"
+            "Важно: не выдумывай авторство текста.\n\n"
             f"ТЕКСТ ПОЛЬЗОВАТЕЛЯ:\n{user_text}"
         )
-
         thinking = await message.answer(
             f"<i>📝 {author.get('name', author_key)} читает и разбирает…</i>",
             parse_mode=ParseMode.HTML
         )
-
         try:
             response = await gigachat_client.generate_response(
                 author_key=author_key,
@@ -916,10 +542,8 @@ async def handle_message(message: Message):
                 await thinking.delete()
             except Exception:
                 pass
-
             await message.answer(
-                f"{author.get('name', author_key)}:\n\n{response}\n\n"
-                "<i>Можешь прислать ещё текст — разберу тоже.</i>",
+                f"{author.get('name', author_key)}:\n\n{response}",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_back_to_chat_keyboard()
             )
@@ -930,16 +554,10 @@ async def handle_message(message: Message):
                 await thinking.delete()
             except Exception:
                 pass
-            await message.answer(
-                "⚠️ Не получилось сделать разбор. Попробуй ещё раз.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_back_to_chat_keyboard()
-            )
+            await message.answer("⚠️ Ошибка разбора. Попробуй ещё раз.", parse_mode=ParseMode.HTML)
             return
 
-    # =========================
-    # 🎓 ЕГЭ-РЕЖИМ
-    # =========================
+    # 🎓 ЕГЭ
     if mode == "ege_mode":
         prompt = (
             "Ты помощник по литературе и ЕГЭ.\n"
@@ -947,16 +565,13 @@ async def handle_message(message: Message):
             "- НЕ пиши полностью готовое сочинение под ключ\n"
             "- Дай: план, тезис, 2–3 аргумента, примеры, краткие цитаты (без длинных)\n"
             "- Дай 3–5 сильных формулировок\n"
-            "- Если запрос неполный — предложи 2 варианта трактовки\n"
-            "- Пиши структурировано\n\n"
-            f"ЗАПРОС ПОЛЬЗОВАТЕЛЯ:\n{user_text}"
+            "- Если запрос неполный — предложи 2 трактовки\n\n"
+            f"ЗАПРОС:\n{user_text}"
         )
-
         thinking = await message.answer(
             f"<i>🎓 {author.get('name', author_key)} помогает подготовиться…</i>",
             parse_mode=ParseMode.HTML
         )
-
         try:
             response = await gigachat_client.generate_response(
                 author_key=author_key,
@@ -967,7 +582,6 @@ async def handle_message(message: Message):
                 await thinking.delete()
             except Exception:
                 pass
-
             await message.answer(
                 f"{author.get('name', author_key)}:\n\n{response}",
                 parse_mode=ParseMode.HTML,
@@ -975,21 +589,15 @@ async def handle_message(message: Message):
             )
             return
         except Exception as e:
-            logger.exception("Ошибка ЕГЭ-режима: %s", e)
+            logger.exception("Ошибка ЕГЭ: %s", e)
             try:
                 await thinking.delete()
             except Exception:
                 pass
-            await message.answer(
-                "⚠️ Не получилось помочь в ЕГЭ-режиме. Попробуй ещё раз.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_back_to_chat_keyboard()
-            )
+            await message.answer("⚠️ Ошибка ЕГЭ-режима. Попробуй ещё раз.", parse_mode=ParseMode.HTML)
             return
 
-    # =========================
-    # 💬 ДИАЛОГ АВТОРОВ
-    # =========================
+    # 💬 Диалог авторов
     if mode == "dialog_wait_topic":
         first = user_data.get("dialog_first_author")
         second = user_data.get("dialog_second_author")
@@ -1007,27 +615,19 @@ async def handle_message(message: Message):
         a2 = get_author(second)
 
         prompt = (
-            "Сгенерируй короткий, но содержательный диалог между двумя авторами.\n"
+            "Сгенерируй содержательный диалог между двумя авторами.\n"
             "Формат:\n"
-            "- 8–14 реплик\n"
+            "- 10–14 реплик\n"
             "- реплики строго чередуются\n"
             "- каждая реплика начинается с имени автора и двоеточия\n"
-            "- в конце 1–2 строки итога\n\n"
-            "Важно:\n"
-            "- Без современного сленга\n"
-            "- Без карикатуры\n\n"
+            "- финал: 1–2 строки итога\n\n"
+            "Важно: без сленга, без карикатуры.\n\n"
             f"ТЕМА:\n{user_text}\n\n"
-            f"ПЕРВЫЙ АВТОР: {a1.get('name', first)}\n"
-            f"СТИЛЬ ПЕРВОГО: {a1.get('style_prompt','')}\n\n"
-            f"ВТОРОЙ АВТОР: {a2.get('name', second)}\n"
-            f"СТИЛЬ ВТОРОГО: {a2.get('style_prompt','')}\n"
+            f"ПЕРВЫЙ: {a1.get('name', first)}\nСТИЛЬ: {a1.get('style_prompt','')}\n\n"
+            f"ВТОРОЙ: {a2.get('name', second)}\nСТИЛЬ: {a2.get('style_prompt','')}\n"
         )
 
-        thinking = await message.answer(
-            "<i>💬 Авторы начинают разговор…</i>",
-            parse_mode=ParseMode.HTML
-        )
-
+        thinking = await message.answer("<i>💬 Авторы начинают разговор…</i>", parse_mode=ParseMode.HTML)
         try:
             response = await gigachat_client.generate_response(
                 author_key=author_key,
@@ -1040,47 +640,31 @@ async def handle_message(message: Message):
                 pass
 
             db.set_mode(user_id, None)
-
-            await message.answer(
-                response,
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_chat_keyboard()
-            )
+            await message.answer(response, parse_mode=ParseMode.HTML, reply_markup=get_chat_keyboard())
             return
         except Exception as e:
-            logger.exception("Ошибка диалога авторов: %s", e)
+            logger.exception("Ошибка диалога: %s", e)
             try:
                 await thinking.delete()
             except Exception:
                 pass
-            await message.answer(
-                "⚠️ Не получилось сделать диалог. Попробуй ещё раз.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_chat_keyboard()
-            )
             db.set_mode(user_id, None)
+            await message.answer("⚠️ Ошибка диалога. Попробуй ещё раз.", parse_mode=ParseMode.HTML)
             return
 
-    # =========================
     # ✍️ Соавторство
-    # =========================
     if mode in ("cowrite_prose", "cowrite_poem"):
         genre = "рассказ" if mode == "cowrite_prose" else "стихотворение"
         prompt = (
             f"Мы пишем {genre} ВМЕСТЕ.\n"
-            "Пользователь написал фрагмент ниже.\n\n"
-            "Твоя задача:\n"
-            "- органично ПРОДОЛЖИТЬ\n"
-            "- сохранить стиль автора\n"
-            "- НЕ завершать полностью\n\n"
+            "Продолжи текст пользователя, сохрани стиль автора.\n"
+            "НЕ завершай полностью, оставь место пользователю.\n\n"
             f"ФРАГМЕНТ:\n{user_text}"
         )
-
         thinking = await message.answer(
             f"<i>✍️ {author.get('name', author_key)} продолжает...</i>",
             parse_mode=ParseMode.HTML
         )
-
         try:
             response = await gigachat_client.generate_response(
                 author_key=author_key,
@@ -1093,8 +677,7 @@ async def handle_message(message: Message):
                 pass
 
             await message.answer(
-                f"{author.get('name', author_key)}:\n\n{response}\n\n"
-                "<i>Твоя очередь — допиши следующий фрагмент ✍️</i>",
+                f"{author.get('name', author_key)}:\n\n{response}\n\n<i>Твоя очередь ✍️</i>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_chat_keyboard()
             )
@@ -1106,21 +689,14 @@ async def handle_message(message: Message):
                 await thinking.delete()
             except Exception:
                 pass
-            await message.answer(
-                "⚠️ Не получилось продолжить текст. Попробуйте ещё раз.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_chat_keyboard()
-            )
+            await message.answer("⚠️ Ошибка соавторства. Попробуй ещё раз.", parse_mode=ParseMode.HTML)
             return
 
-    # =========================
     # 💬 Обычный чат
-    # =========================
     thinking = await message.answer(
         f"<i>✨ {author.get('name', author_key)} обдумывает ответ...</i>",
         parse_mode=ParseMode.HTML
     )
-
     try:
         response = await gigachat_client.generate_response(
             author_key=author_key,
@@ -1168,7 +744,7 @@ async def main():
 
     dp.include_router(router)
 
-    # на всякий случай выключаем webhook
+    # На всякий случай выключаем webhook
     await bot.delete_webhook(drop_pending_updates=True)
 
     logger.info("🤖 Start polling...")
