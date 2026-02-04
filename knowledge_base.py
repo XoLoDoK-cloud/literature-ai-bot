@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import List
+import re
 
 
 @dataclass
@@ -13,65 +14,79 @@ class KBItem:
 
 
 # =========================
-# База фактов (минимально + Филатов подробно)
+# RAG-база (фрагменты по авторам)
 # =========================
-
-AUTHOR_CARDS: Dict[str, Dict[str, Any]] = {'filatov': {'full_name': 'Леонид Алексеевич Филатов', 'years': '1946–2003', 'about': ['Советский и российский актёр, режиссёр, поэт, драматург и публицист.', 'Широко известен сатирической поэмой «Про Федота-стрельца, удалого молодца».', 'Работал в театре и кино, выступал как автор и ведущий проектов.'], 'key_works': ['«Про Федота-стрельца, удалого молодца» (сатирическая поэма)', 'Публицистические и авторские выступления (в т.ч. телевизионные проекты, связанные с литературой и культурой)'], 'themes': ['сатира и социальная ирония', 'ценность слова и ответственности', 'честность и достоинство'], 'style': ['театральная интонация без клоунады', 'меткость формулировок', 'умная ирония']}, 'pushkin': {'full_name': 'Александр Сергеевич Пушкин', 'years': '1799–1837'}, 'lermontov': {'full_name': 'Михаил Юрьевич Лермонтов', 'years': '1814–1841'}, 'gogol': {'full_name': 'Николай Васильевич Гоголь', 'years': '1809–1852'}, 'tolstoy': {'full_name': 'Лев Николаевич Толстой', 'years': '1828–1910'}, 'dostoevsky': {'full_name': 'Фёдор Михайлович Достоевский', 'years': '1821–1881'}, 'chekhov': {'full_name': 'Антон Павлович Чехов', 'years': '1860–1904'}, 'akhmatova': {'full_name': 'Анна Андреевна Ахматова', 'years': '1889–1966'}, 'esenin': {'full_name': 'Сергей Александрович Есенин', 'years': '1895–1925'}, 'mayakovsky': {'full_name': 'Владимир Владимирович Маяковский', 'years': '1893–1930'}, 'blokk': {'full_name': 'Александр Александрович Блок', 'years': '1880–1921'}, 'bulgakov': {'full_name': 'Михаил Афанасьевич Булгаков', 'years': '1891–1940'}, 'brodsky': {'full_name': 'Иосиф Александрович Бродский', 'years': '1940–1996'}, 'turgenev': {'full_name': 'Иван Сергеевич Тургенев', 'years': '1818–1883'}, 'goncharov': {'full_name': 'Иван Александрович Гончаров', 'years': '1812–1891'}, 'ostrovsky': {'full_name': 'Александр Николаевич Островский', 'years': '1823–1886'}, 'nekrasov': {'full_name': 'Николай Алексеевич Некрасов', 'years': '1821–1878'}, 'tyutchev': {'full_name': 'Фёдор Иванович Тютчев', 'years': '1803–1873'}, 'fet': {'full_name': 'Афанасий Афанасьевич Фет', 'years': '1820–1892'}, 'tsvetaeva': {'full_name': 'Марина Ивановна Цветаева', 'years': '1892–1941'}, 'mandelshtam': {'full_name': 'Осип Эмильевич Мандельштам', 'years': '1891–1938'}, 'gorky': {'full_name': 'Максим Горький (Алексей Максимович Пешков)', 'years': '1868–1936'}, 'zoshchenko': {'full_name': 'Михаил Михайлович Зощенко', 'years': '1894–1958'}, 'platonov': {'full_name': 'Андрей Платонович Платонов', 'years': '1899–1951'}, 'zamyatin': {'full_name': 'Евгений Иванович Замятин', 'years': '1884–1937'}, 'nabokov': {'full_name': 'Владимир Владимирович Набоков', 'years': '1899–1977'}, 'bunin': {'full_name': 'Иван Алексеевич Бунин', 'years': '1870–1953'}, 'pasternak': {'full_name': 'Борис Леонидович Пастернак', 'years': '1890–1960'}, 'solzhenitsyn': {'full_name': 'Александр Исаевич Солженицын', 'years': '1918–2008'}}
-
 
 KB: List[KBItem] = [
     KBItem(
         author_key="filatov",
-        tags=["биография", "кто такой", "факты", "жизнь"],
+        tags=["биография", "кто такой", "жизнь", "актер", "режиссер", "драматург"],
         text=(
-            "Леонид Алексеевич Филатов (1946–2003) — актёр, режиссёр, поэт, драматург и публицист. "
-            "Известен сочетанием театральной выразительности и точной сатиры."
+            "Леонид Алексеевич Филатов — актёр, режиссёр, поэт, драматург и публицист. "
+            "Его часто вспоминают за сочетание сценической выразительности и точной иронии."
         ),
     ),
     KBItem(
         author_key="filatov",
-        tags=["произведения", "что написал", "федот", "главное"],
+        tags=["произведения", "что написал", "федот", "главное", "поэма"],
         text=(
             "Одно из самых известных произведений Филатова — сатирическая поэма "
-            "«Про Федота-стрельца, удалого молодца». "
-            "Её часто ценят за иронию, живой язык и социальные намёки."
+            "«Про Федота-стрельца, удалого молодца»: ирония, живой язык, социальные намёки."
         ),
     ),
     KBItem(
         author_key="filatov",
-        tags=["стиль", "манера", "как говорит", "ирония", "сатира"],
+        tags=["стиль", "манера", "ирония", "сатира", "речь", "язык"],
         text=(
-            "Манера Филатова: умная ирония без грубости, точные формулировки, чувство меры. "
-            "Даже в сатире у него слышна ответственность за слово."
+            "Манера Филатова: умная ирония без грубости, точные формулировки и чувство меры. "
+            "Даже в сатире слышна ответственность за слово."
         ),
     ),
     KBItem(
         author_key="filatov",
-        tags=["темы", "смысл", "о чем", "позиция"],
+        tags=["темы", "смысл", "о чем", "позиция", "ценности"],
         text=(
-            "Филатову близки темы честности, внутреннего достоинства, цены слова, "
+            "Филатову близки темы честности, внутреннего достоинства и цены слова, "
             "а также сатирический взгляд на общественные привычки и власть языка."
         ),
     ),
 ]
 
 
+_word_re = re.compile(r"[а-яёa-z0-9]+", re.IGNORECASE)
+
+
+def _tokenize(text: str) -> List[str]:
+    """
+    Простая нормальная токенизация:
+    - только буквы/цифры
+    - слова длиной >= 3
+    """
+    if not text:
+        return []
+    tokens = _word_re.findall(text.lower())
+    return [t for t in tokens if len(t) >= 3]
+
+
 def rag_search(author_key: str, query: str, limit: int = 7) -> List[str]:
     """
     Простая RAG-поисковая функция:
-    - ищем совпадения по словам запроса в KBItem.text и KBItem.tags
+    - ищем совпадения по токенам запроса в KBItem.text и KBItem.tags
     - возвращаем топ-N фрагментов
     """
-    q = (query or "").lower().strip()
-    if not q:
+    author_key = (author_key or "").strip()
+    if not author_key:
         return []
 
-    words = [w for w in q.replace("?", " ").replace("!", " ").replace(",", " ").split() if len(w) >= 3]
+    words = _tokenize(query)
+    if not words:
+        return []
 
     scored = []
     for item in KB:
         if item.author_key != author_key:
             continue
+
         text_l = item.text.lower()
         tags_l = " ".join(item.tags).lower()
 
@@ -86,43 +101,19 @@ def rag_search(author_key: str, query: str, limit: int = 7) -> List[str]:
             scored.append((score, item.text))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [t for _, t in scored[:limit]]
+    return [t for _, t in scored[: max(1, int(limit))]]
 
 
-def format_rag_blocks(blocks: List[str]) -> str:
+def format_rag_blocks(blocks: List[str], max_chars: int = 2200) -> str:
+    """
+    Форматирование подсказок для промпта:
+    - буллеты
+    - лимит длины, чтобы RAG не "забивал" ответ
+    """
     if not blocks:
         return ""
-    return "\n\n".join(f"• {b}" for b in blocks)
 
-
-def get_author_card(author_key: str) -> Dict[str, Any] | None:
-    return AUTHOR_CARDS.get(author_key)
-
-
-def format_compare_facts(card: Dict[str, Any]) -> str:
-    """
-    Превращаем карточку в текст фактов для compare_authors
-    """
-    if not card:
-        return ""
-
-    lines = []
-    full_name = card.get("full_name")
-    years = card.get("years")
-    if full_name:
-        lines.append(f"Имя: {full_name}")
-    if years:
-        lines.append(f"Годы: {years}")
-
-    for k in ("about", "key_works", "themes", "style"):
-        v = card.get(k)
-        if isinstance(v, list) and v:
-            title = {
-                "about": "Кратко",
-                "key_works": "Известен по",
-                "themes": "Темы",
-                "style": "Стиль",
-            }.get(k, k)
-            lines.append(f"{title}: " + "; ".join(v))
-
-    return "\n".join(lines)
+    text = "\n\n".join(f"• {b.strip()}" for b in blocks if (b or "").strip()).strip()
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "…"
+    return text
