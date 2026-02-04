@@ -1,3 +1,4 @@
+# main.py
 import os
 import asyncio
 import logging
@@ -10,6 +11,7 @@ from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramConflictError
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -41,7 +43,10 @@ LOCK_STALE_SECONDS = int(os.getenv("BOT_LOCK_STALE_SECONDS", "1800"))  # 30 ми
 
 
 def acquire_single_instance_lock() -> int:
-    """Создаёт lock-файл атомарно. Если уже существует — значит бот запущен второй раз."""
+    """
+    Создаёт lock-файл атомарно. Если уже существует — значит бот запущен второй раз.
+    Важно: lock работает только внутри одного инстанса/контейнера.
+    """
     flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
     try:
         fd = os.open(LOCK_PATH, flags)
@@ -67,8 +72,8 @@ def acquire_single_instance_lock() -> int:
             pass
 
         raise RuntimeError(
-            "Бот уже запущен в другом процессе (TelegramConflictError). "
-            "Останови второй запуск (локально/другой деплой) или подожди, пока старый процесс завершится."
+            "Бот уже запущен в другом процессе. "
+            "Останови второй запуск/инстанс или подожди, пока старый процесс завершится."
         )
 
 
@@ -84,7 +89,7 @@ def release_single_instance_lock(fd: int) -> None:
 
 
 # =========================
-# 🛠 Админ-настройки (кнопки и команды только админам)
+# 🛠 Админ-настройки
 # =========================
 def _admins_from_env() -> Set[int]:
     raw = (os.getenv("ADMIN_IDS", "") or "").strip()
@@ -198,7 +203,30 @@ def get_admin_keyboard():
     return kb.as_markup()
 
 
-# Админ-команды
+# =========================
+# 🌐 Мини-сервер для Render/Railway (слушаем PORT)
+# =========================
+async def start_web_server() -> None:
+    async def health(_request: web.Request) -> web.Response:
+        return web.Response(text="OK")
+
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", "10000"))
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+
+    logger.info("🌐 Web server started on 0.0.0.0:%s", port)
+
+
+# =========================
+# 🤖 Админ-команды
+# =========================
 @router.message(Command("whoami"))
 async def cmd_whoami(message: Message):
     user_id = message.from_user.id
@@ -325,27 +353,6 @@ async def cmd_broadcast(message: Message):
         f"Не доставлено: <b>{fail}</b>",
         parse_mode=ParseMode.HTML,
     )
-
-
-# =========================
-# 🌐 Мини-сервер для Render/Railway (слушаем PORT)
-# =========================
-async def start_web_server() -> None:
-    async def health(_request: web.Request) -> web.Response:
-        return web.Response(text="OK")
-
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    port = int(os.getenv("PORT", "10000"))
-    site = web.TCPSite(runner, host="0.0.0.0", port=port)
-    await site.start()
-
-    logger.info("🌐 Web server started on 0.0.0.0:%s", port)
 
 
 # =========================
@@ -745,11 +752,16 @@ async def handle_message(message: Message):
         )
 
 
+# =========================
+# 🚀 Запуск
+# =========================
 async def main():
+    logger.info("BOOT: pid=%s", os.getpid())
+
     if not BOT_TOKEN:
         raise RuntimeError("❌ BOT_TOKEN пуст. Добавь BOT_TOKEN в переменные окружения / .env")
 
-    # 🔒 Запрещаем запуск двух экземпляров одновременно
+    # 🔒 Запрещаем запуск двух экземпляров одновременно (в рамках одного контейнера)
     lock_fd = None
     try:
         lock_fd = acquire_single_instance_lock()
@@ -769,6 +781,7 @@ async def main():
             except Exception:
                 pass
 
+    # Web server для Render
     await start_web_server()
 
     bot = Bot(token=BOT_TOKEN)
@@ -788,6 +801,13 @@ async def main():
     logger.info("🤖 Start polling...")
     try:
         await dp.start_polling(bot)
+    except TelegramConflictError:
+        # Главное: не спамить логами — просто выходим.
+        logger.error(
+            "⚠️ TelegramConflictError: Telegram видит второй getUpdates. "
+            "Этот процесс завершится. Проверь, что в Render 1 instance и нет второго сервиса/воркера."
+        )
+        return
     finally:
         _cleanup()
 
