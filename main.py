@@ -5,7 +5,7 @@ import logging
 import atexit
 import signal
 import time
-from typing import Set, Any
+from typing import Set, Any, Dict
 
 from aiohttp import web
 
@@ -49,7 +49,6 @@ def acquire_single_instance_lock() -> int:
         os.write(fd, payload.encode("utf-8"))
         return fd
     except FileExistsError:
-        # Если lock "завис" — удалим по TTL
         try:
             age = time.time() - os.path.getmtime(LOCK_PATH)
             if age > LOCK_STALE_SECONDS:
@@ -101,6 +100,9 @@ def is_admin(user_id: int) -> bool:
     return int(user_id) in _admins_from_env()
 
 
+# =========================
+# 💾 Простая локальная "БД" на JSON (users + stats)
+# =========================
 def _data_dir() -> str:
     path = os.path.join(os.getcwd(), "data")
     os.makedirs(path, exist_ok=True)
@@ -110,7 +112,6 @@ def _data_dir() -> str:
 def _load_json(path: str, default: Any):
     try:
         import json
-
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
@@ -119,15 +120,19 @@ def _load_json(path: str, default: Any):
 
 def _save_json(path: str, obj: Any) -> None:
     import json
-
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
 
+# ---------- users ----------
+def _users_path() -> str:
+    return os.path.join(_data_dir(), "users.json")
+
+
 def track_user(user_id: int) -> None:
-    p = os.path.join(_data_dir(), "users.json")
+    p = _users_path()
     data = _load_json(p, {"users": []})
     users = set()
     for x in data.get("users", []):
@@ -140,40 +145,8 @@ def track_user(user_id: int) -> None:
         _save_json(p, {"users": sorted(list(users))})
 
 
-def _banned_path() -> str:
-    return os.path.join(_data_dir(), "banned.json")
-
-
-def get_banned() -> Set[int]:
-    data = _load_json(_banned_path(), {"banned": []})
-    out: Set[int] = set()
-    for x in data.get("banned", []):
-        try:
-            out.add(int(x))
-        except Exception:
-            pass
-    return out
-
-
-def is_banned(user_id: int) -> bool:
-    return int(user_id) in get_banned()
-
-
-def ban_user(user_id: int) -> None:
-    banned = get_banned()
-    banned.add(int(user_id))
-    _save_json(_banned_path(), {"banned": sorted(list(banned))})
-
-
-def unban_user(user_id: int) -> None:
-    banned = get_banned()
-    banned.discard(int(user_id))
-    _save_json(_banned_path(), {"banned": sorted(list(banned))})
-
-
 def get_all_users() -> list[int]:
-    p = os.path.join(_data_dir(), "users.json")
-    data = _load_json(p, {"users": []})
+    data = _load_json(_users_path(), {"users": []})
     out: list[int] = []
     for x in data.get("users", []):
         try:
@@ -183,27 +156,143 @@ def get_all_users() -> list[int]:
     return sorted(list(set(out)))
 
 
+# ---------- stats ----------
+def _stats_path() -> str:
+    return os.path.join(_data_dir(), "stats.json")
+
+
+def _stats_default() -> Dict[str, Any]:
+    return {
+        "users_last_seen": {},     # user_id -> unix_ts
+        "messages_total": 0,
+        "messages_by_user": {},    # user_id -> count
+        "commands": {},            # "/start" -> count
+        "authors_selected": {},    # "pushkin" -> count
+    }
+
+
+def _load_stats() -> Dict[str, Any]:
+    return _load_json(_stats_path(), _stats_default())
+
+
+def _save_stats(stats: Dict[str, Any]) -> None:
+    _save_json(_stats_path(), stats)
+
+
+def mark_seen(user_id: int) -> None:
+    stats = _load_stats()
+    stats.setdefault("users_last_seen", {})
+    stats["users_last_seen"][str(int(user_id))] = int(time.time())
+    _save_stats(stats)
+
+
+def inc_message(user_id: int) -> None:
+    stats = _load_stats()
+
+    stats["messages_total"] = int(stats.get("messages_total", 0)) + 1
+
+    stats.setdefault("messages_by_user", {})
+    uid = str(int(user_id))
+    stats["messages_by_user"][uid] = int(stats["messages_by_user"].get(uid, 0)) + 1
+
+    _save_stats(stats)
+
+
+def inc_command(cmd: str) -> None:
+    stats = _load_stats()
+    stats.setdefault("commands", {})
+    stats["commands"][cmd] = int(stats["commands"].get(cmd, 0)) + 1
+    _save_stats(stats)
+
+
+def inc_author_selected(author_key: str) -> None:
+    stats = _load_stats()
+    stats.setdefault("authors_selected", {})
+    stats["authors_selected"][author_key] = int(stats["authors_selected"].get(author_key, 0)) + 1
+    _save_stats(stats)
+
+
+def _count_active(stats: Dict[str, Any], seconds: int) -> int:
+    now = int(time.time())
+    last_seen = stats.get("users_last_seen", {}) or {}
+    c = 0
+    for _uid, ts in last_seen.items():
+        try:
+            if now - int(ts) <= seconds:
+                c += 1
+        except Exception:
+            pass
+    return c
+
+
+def _top_items(d: Dict[str, Any], n: int = 5) -> list[tuple[str, int]]:
+    items = []
+    for k, v in (d or {}).items():
+        try:
+            items.append((str(k), int(v)))
+        except Exception:
+            pass
+    items.sort(key=lambda x: x[1], reverse=True)
+    return items[:n]
+
+
+def format_admin_stats() -> str:
+    users = get_all_users()
+    stats = _load_stats()
+
+    active_24h = _count_active(stats, 24 * 3600)
+    active_7d = _count_active(stats, 7 * 24 * 3600)
+    active_30d = _count_active(stats, 30 * 24 * 3600)
+
+    top_auth = _top_items(stats.get("authors_selected", {}), 6)
+    top_cmds = _top_items(stats.get("commands", {}), 6)
+    top_users = _top_items(stats.get("messages_by_user", {}), 5)
+
+    lines = []
+    lines.append("📊 <b>Статистика бота</b>\n")
+    lines.append(f"👥 Пользователей всего: <b>{len(users)}</b>")
+    lines.append(f"🟢 Активные за 24ч: <b>{active_24h}</b>")
+    lines.append(f"🟡 Активные за 7д: <b>{active_7d}</b>")
+    lines.append(f"🔵 Активные за 30д: <b>{active_30d}</b>")
+    lines.append(f"💬 Сообщений всего: <b>{int(stats.get('messages_total', 0))}</b>")
+
+    if top_users:
+        lines.append("\n🔥 <b>Самые активные пользователи</b>")
+        for uid, cnt in top_users:
+            lines.append(f"• <code>{uid}</code> — <b>{cnt}</b> сообщений")
+
+    if top_auth:
+        lines.append("\n🏆 <b>Топ авторов (выбор)</b>")
+        for k, cnt in top_auth:
+            name = (get_author(k) or {}).get("name", k)
+            lines.append(f"• {name}: <b>{cnt}</b>")
+
+    if top_cmds:
+        lines.append("\n⌨️ <b>Топ команд</b>")
+        for k, cnt in top_cmds:
+            lines.append(f"• <code>{k}</code>: <b>{cnt}</b>")
+
+    return "\n".join(lines)
+
+
 def get_admin_keyboard():
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
         InlineKeyboardButton(text="📣 Рассылка", callback_data="admin_broadcast_help"),
     )
-    kb.row(
-        InlineKeyboardButton(text="🚫 Бан", callback_data="admin_ban_help"),
-        InlineKeyboardButton(text="✅ Разбан", callback_data="admin_unban_help"),
-    )
     kb.row(InlineKeyboardButton(text="🆔 Мой ID", callback_data="admin_whoami"))
     return kb.as_markup()
 
 
 # =========================
-# ✅ Админ callback-кнопки (чтобы панель реально работала)
+# ✅ Админ callback-кнопки
 # =========================
 @router.callback_query(F.data == "admin_whoami")
 async def cb_admin_whoami(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
+    mark_seen(user_id)
     await callback.answer()
     await callback.message.answer(f"🆔 Ваш ID: <code>{user_id}</code>", parse_mode=ParseMode.HTML)
 
@@ -212,28 +301,21 @@ async def cb_admin_whoami(callback: CallbackQuery):
 async def cb_admin_stats(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
+    mark_seen(user_id)
 
     if not is_admin(user_id):
         await callback.answer("⛔ Нет доступа", show_alert=True)
         return
 
-    users = get_all_users()
-    banned = get_banned()
-
     await callback.answer()
-    await callback.message.answer(
-        "📊 <b>Статистика</b>\n\n"
-        f"👥 Пользователей: <b>{len(users)}</b>\n"
-        f"🚫 В бане: <b>{len(banned)}</b>\n\n"
-        "<i>Пользователь попадает в базу, когда пишет боту или нажимает /start.</i>",
-        parse_mode=ParseMode.HTML,
-    )
+    await callback.message.answer(format_admin_stats(), parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "admin_broadcast_help")
 async def cb_admin_broadcast_help(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
+    mark_seen(user_id)
 
     if not is_admin(user_id):
         await callback.answer("⛔ Нет доступа", show_alert=True)
@@ -250,53 +332,15 @@ async def cb_admin_broadcast_help(callback: CallbackQuery):
     )
 
 
-@router.callback_query(F.data == "admin_ban_help")
-async def cb_admin_ban_help(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    track_user(user_id)
-
-    if not is_admin(user_id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
-        return
-
-    await callback.answer()
-    await callback.message.answer(
-        "🚫 <b>Бан</b>\n\n"
-        "Команда:\n"
-        "<code>/ban USER_ID</code>\n\n"
-        "Пример:\n"
-        "<code>/ban 123456789</code>",
-        parse_mode=ParseMode.HTML,
-    )
-
-
-@router.callback_query(F.data == "admin_unban_help")
-async def cb_admin_unban_help(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    track_user(user_id)
-
-    if not is_admin(user_id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
-        return
-
-    await callback.answer()
-    await callback.message.answer(
-        "✅ <b>Разбан</b>\n\n"
-        "Команда:\n"
-        "<code>/unban USER_ID</code>\n\n"
-        "Пример:\n"
-        "<code>/unban 123456789</code>",
-        parse_mode=ParseMode.HTML,
-    )
-
-
 # =========================
-# Админ-команды
+# Админ-команды (без ban/unban)
 # =========================
 @router.message(Command("whoami"))
 async def cmd_whoami(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
+    mark_seen(user_id)
+    inc_command("/whoami")
     await message.answer(f"🆔 Ваш ID: <code>{user_id}</code>", parse_mode=ParseMode.HTML)
 
 
@@ -304,6 +348,9 @@ async def cmd_whoami(message: Message):
 async def cmd_admin(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
+    mark_seen(user_id)
+    inc_command("/admin")
+
     if not is_admin(user_id):
         await message.answer("⛔ У вас нет доступа к админ-командам.")
         return
@@ -312,8 +359,6 @@ async def cmd_admin(message: Message):
         "🛠 <b>Админ-панель</b>\n\n"
         "• <code>/stats</code> — статистика\n"
         "• <code>/broadcast ТЕКСТ</code> — рассылка\n"
-        "• <code>/ban USER_ID</code> — бан\n"
-        "• <code>/unban USER_ID</code> — разбан\n"
         "• <code>/whoami</code> — ваш ID\n",
         parse_mode=ParseMode.HTML,
         reply_markup=get_admin_keyboard(),
@@ -324,60 +369,23 @@ async def cmd_admin(message: Message):
 async def cmd_stats(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
+    mark_seen(user_id)
+    inc_command("/stats")
+
     if not is_admin(user_id):
         await message.answer("⛔ Нет доступа.")
         return
 
-    users = get_all_users()
-    banned = get_banned()
-    await message.answer(
-        "📊 <b>Статистика</b>\n\n"
-        f"👥 Пользователей: <b>{len(users)}</b>\n"
-        f"🚫 В бане: <b>{len(banned)}</b>\n",
-        parse_mode=ParseMode.HTML,
-    )
-
-
-@router.message(Command("ban"))
-async def cmd_ban(message: Message):
-    user_id = message.from_user.id
-    track_user(user_id)
-    if not is_admin(user_id):
-        await message.answer("⛔ Нет доступа.")
-        return
-
-    parts = (message.text or "").split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("Использование: <code>/ban USER_ID</code>", parse_mode=ParseMode.HTML)
-        return
-
-    target = int(parts[1])
-    ban_user(target)
-    await message.answer(f"🚫 Пользователь <code>{target}</code> забанен.", parse_mode=ParseMode.HTML)
-
-
-@router.message(Command("unban"))
-async def cmd_unban(message: Message):
-    user_id = message.from_user.id
-    track_user(user_id)
-    if not is_admin(user_id):
-        await message.answer("⛔ Нет доступа.")
-        return
-
-    parts = (message.text or "").split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.answer("Использование: <code>/unban USER_ID</code>", parse_mode=ParseMode.HTML)
-        return
-
-    target = int(parts[1])
-    unban_user(target)
-    await message.answer(f"✅ Пользователь <code>{target}</code> разбанен.", parse_mode=ParseMode.HTML)
+    await message.answer(format_admin_stats(), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
+    mark_seen(user_id)
+    inc_command("/broadcast")
+
     if not is_admin(user_id):
         await message.answer("⛔ Нет доступа.")
         return
@@ -388,8 +396,6 @@ async def cmd_broadcast(message: Message):
         return
 
     users = get_all_users()
-    banned = get_banned()
-
     ok = 0
     fail = 0
 
@@ -399,8 +405,6 @@ async def cmd_broadcast(message: Message):
     )
 
     for uid in users:
-        if uid in banned:
-            continue
         try:
             await message.bot.send_message(
                 uid,
@@ -448,10 +452,8 @@ async def start_web_server() -> None:
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-
-    if is_banned(user_id) and not is_admin(user_id):
-        await message.answer("🚫 Вы заблокированы администратором.")
-        return
+    mark_seen(user_id)
+    inc_command("/start")
 
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
@@ -467,7 +469,6 @@ async def cmd_start(message: Message):
     )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_groups_keyboard())
 
-    # Админ-панель показываем только админу
     if is_admin(user_id):
         await message.answer(
             "🛠 <b>Админ-панель</b>",
@@ -478,6 +479,11 @@ async def cmd_start(message: Message):
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
+    user_id = message.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+    inc_command("/help")
+
     await message.answer(
         "❓ <b>Помощь</b>\n\n"
         "1) Выбери эпоху\n"
@@ -491,6 +497,9 @@ async def cmd_help(message: Message):
 @router.callback_query(F.data == "groups_menu")
 async def cb_groups_menu(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
 
@@ -504,6 +513,10 @@ async def cb_groups_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("group_"))
 async def cb_group_selected(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     group_key = callback.data.split("_", 1)[1]
     await callback.message.edit_text(
         "👥 <b>Выберите автора:</b>",
@@ -516,6 +529,9 @@ async def cb_group_selected(callback: CallbackQuery):
 @router.callback_query(F.data == "change_author")
 async def cb_change_author(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
 
@@ -530,6 +546,9 @@ async def cb_change_author(callback: CallbackQuery):
 @router.callback_query(F.data == "reset_chat")
 async def cb_reset_chat(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     db.reset_dialog(user_id, keep_author=True)
     db.set_mode(user_id, None)
 
@@ -544,6 +563,9 @@ async def cb_reset_chat(callback: CallbackQuery):
 @router.callback_query(F.data == "clear_all")
 async def cb_clear_all(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     db.clear_all(user_id)
 
     await callback.message.edit_text(
@@ -557,6 +579,10 @@ async def cb_clear_all(callback: CallbackQuery):
 
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     await cmd_start(callback.message)
     await callback.answer()
 
@@ -564,6 +590,9 @@ async def cb_main_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "cowrite")
 async def cb_cowrite_start(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     user_data = db.get_user_data(user_id)
 
     if not user_data.get("selected_author"):
@@ -589,6 +618,9 @@ async def cb_cowrite_start(callback: CallbackQuery):
 @router.callback_query(F.data.in_({"cowrite_prose", "cowrite_poem"}))
 async def cb_cowrite_mode_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     mode = callback.data
     db.set_mode(user_id, mode)
 
@@ -606,6 +638,9 @@ async def cb_cowrite_mode_selected(callback: CallbackQuery):
 @router.callback_query(F.data == "compare_authors")
 async def cb_compare_authors(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     user_data = db.get_user_data(user_id)
 
     if not user_data.get("selected_author"):
@@ -631,6 +666,9 @@ async def cb_compare_authors(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("author_"))
 async def cb_author_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
+    track_user(user_id)
+    mark_seen(user_id)
+
     author_key = callback.data.split("_", 1)[1]
 
     if author_key not in list_author_keys():
@@ -702,6 +740,8 @@ async def cb_author_selected(callback: CallbackQuery):
     db.set_mode(user_id, None)
     db.reset_compare(user_id)
 
+    inc_author_selected(author_key)
+
     author = get_author(author_key)
     await callback.message.edit_text(
         f"{author.get('name', author_key)}\n\n"
@@ -717,10 +757,8 @@ async def cb_author_selected(callback: CallbackQuery):
 async def handle_message(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-
-    if is_banned(user_id) and not is_admin(user_id):
-        await message.answer("🚫 Вы заблокированы администратором.", parse_mode=ParseMode.HTML)
-        return
+    mark_seen(user_id)
+    inc_message(user_id)
 
     user_text = (message.text or "").strip()
     if not user_text:
@@ -836,11 +874,34 @@ async def handle_message(message: Message):
         )
 
 
+# =========================
+# 🌐 Мини-сервер для Render/Railway
+# =========================
+async def start_web_server() -> None:
+    async def health(_request: web.Request) -> web.Response:
+        return web.Response(text="OK")
+
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", "10000"))
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+
+    logger.info("🌐 Web server started on 0.0.0.0:%s", port)
+
+
+# =========================
+# 🚀 Запуск
+# =========================
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("❌ BOT_TOKEN пуст. Добавь BOT_TOKEN в переменные окружения / .env")
 
-    # 🔒 Запрещаем запуск двух экземпляров одновременно
     lock_fd = None
     try:
         lock_fd = acquire_single_instance_lock()
@@ -862,7 +923,7 @@ async def main():
 
     await start_web_server()
 
-    bot = Bot(token=BOT_TOKEN)  # parse_mode ставим в message.answer
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
     limiter = InMemoryRateLimiter(RateLimitConfig())
@@ -870,7 +931,6 @@ async def main():
 
     dp.include_router(router)
 
-    # лечит "webhook is active"
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception:
