@@ -196,10 +196,41 @@ def list_author_keys() -> List[str]:
 
 
 def get_author(author_key: str) -> Dict:
-    return AUTHORS.get(author_key, {
+    """
+    Возвращает карточку автора из AUTHORS.
+
+    ВАЖНО:
+    - Для совместимости добавляем поле `system_prompt`, если его нет.
+    - `system_prompt` строится из имени автора + `style_prompt` и содержит защиту от подмены автора.
+    """
+    base = AUTHORS.get(author_key, {
         "name": author_key,
         "group": "golden_age",
         "greeting": "Здравствуйте!",
         "style_prompt": "Говори вежливо и понятно.",
         "facts": [],
     })
+
+    # Не мутируем глобальный AUTHORS
+    author = dict(base)
+
+    # Совместимость: некоторые части кода ожидают `system_prompt`
+    system_prompt = (author.get("system_prompt") or "").strip()
+    if not system_prompt:
+        name = (author.get("name") or author_key).strip()
+        style = (author.get("style_prompt") or "").strip()
+
+        author["system_prompt"] = (
+            f"Ты — {name}.
+"
+            f"{style}
+
+"
+            "ЖЁСТКОЕ ПРАВИЛО: никогда не выдавай себя за другого автора.
+"
+            "Если в источниках/KNOWLEDGE встретился другой автор — сообщи о несоответствии и не подменяй личность.
+"
+            "Не выдумывай даты, факты и произведения."
+        ).strip()
+
+    return author
