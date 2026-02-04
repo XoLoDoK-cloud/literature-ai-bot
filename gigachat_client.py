@@ -1,3 +1,4 @@
+# gigachat_client.py
 import asyncio
 from typing import List, Optional
 
@@ -10,22 +11,7 @@ except ImportError:
 
 from config import GIGACHAT_CREDENTIALS
 from authors import get_author
-from knowledge_base import rag_search, format_rag_blocks, get_author_card, format_compare_facts
-
-# ✅ ВАЖНО: берём стиль автора из вашего authors.py
-from authors import get_author
-
-
-def _is_fact_question(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    markers = (
-        "когда", "где", "кто", "сколько", "дата", "год",
-        "родился", "родилась", "умер", "умерла",
-        "место рождения", "причина смерти", "в каком году", "где учился"
-    )
-    return any(m in t for m in markers)
+from knowledge_base import rag_search, format_rag_blocks
 
 
 class GigaChatClient:
@@ -41,25 +27,24 @@ class GigaChatClient:
 
     def _author_style_prompt(self, author_key: str) -> str:
         """
-        1) Пытаемся взять system_prompt из authors.py
-        2) Если его нет — используем старый fallback styles
+        Берём system_prompt из authors.py (он самый правильный).
+        Если вдруг пусто — fallback.
         """
         author = get_author(author_key) or {}
         system_prompt = (author.get("system_prompt") or "").strip()
         if system_prompt:
             return system_prompt
 
-        # fallback (старое поведение, чтобы не ломать совместимость)
+        # fallback (на всякий случай)
         styles = {
-            "pushkin": "Ты — Александр Сергеевич Пушкин. Ясно, изящно, иногда поэтично. Даты не выдумывай.",
-            "dostoevsky": "Ты — Фёдор Михайлович Достоевский. Глубоко, психологично. Даты не выдумывай.",
-            "tolstoy": "Ты — Лев Николаевич Толстой. Мудро и просто. Даты не выдумывай.",
-            "gogol": "Ты — Николай Васильевич Гоголь. Иронично и образно. Даты не выдумывай.",
-            "chekhov": "Ты — Антон Павлович Чехов. Коротко и точно. Даты не выдумывай.",
-            "gigachad": "Ты — Гигачад. Энергично и мотивирующе. Но факты не выдумывай.",
-            "filatov": "Ты — Леонид Алексеевич Филатов. Иронично, интеллигентно, сатирично, но без грубости. Даты не выдумывай.",
+            "pushkin": "Ты — Александр Сергеевич Пушкин. Ясно, изящно, иногда поэтично.",
+            "dostoevsky": "Ты — Фёдор Михайлович Достоевский. Глубоко, психологично.",
+            "tolstoy": "Ты — Лев Николаевич Толстой. Мудро и просто.",
+            "gogol": "Ты — Николай Васильевич Гоголь. Иронично и образно.",
+            "chekhov": "Ты — Антон Павлович Чехов. Коротко и точно.",
+            "filatov": "Ты — Леонид Алексеевич Филатов. Иронично, интеллигентно, сатирично, но без грубости.",
         }
-        return styles.get(author_key, "Ты — русский писатель. Отвечай умно и без выдуманных фактов.")
+        return styles.get(author_key, "Ты — русский писатель. Отвечай умно и выразительно.")
 
     async def generate_response(
         self,
@@ -67,117 +52,97 @@ class GigaChatClient:
         user_message: str,
         conversation_history: Optional[List[dict]] = None
     ) -> str:
-        # RAG 2.0
+        # RAG: просто добавляем как контекст (без строгих правил и без 'в базе нет')
         blocks = rag_search(author_key, user_message, limit=7)
-        rag_text = format_rag_blocks(blocks)
+        rag_text = format_rag_blocks(blocks).strip()
 
-        fact_mode = _is_fact_question(user_message)
         style = self._author_style_prompt(author_key)
 
-        # Если вопрос фактовый, но KNOWLEDGE пуст — не выдумываем.
-        if fact_mode and not rag_text:
-            return "В моей базе этого нет."
+        system_prompt = style + "\n\nПравила:\n" \
+            "— Отвечай в стиле выбранного автора.\n" \
+            "— Если есть блок KNOWLEDGE, используй его как дополнительную подсказку.\n" \
+            "— Не упоминай слово KNOWLEDGE и не пиши, что 'в базе нет'. Просто отвечай.\n"
 
-        # Защита: если KNOWLEDGE неожиданно про другого автора — сообщаем и игнорируем.
-        card = get_author_card(author_key) or {}
-        full_name = (card.get('full_name') or '').strip()
-        if rag_text and full_name and full_name.lower() not in rag_text.lower():
-            # Это не 100% детектор, но защищает от явной подмены контекста.
-            rag_text = ''
+        if rag_text:
+            system_prompt += "\nKNOWLEDGE:\n" + rag_text
 
-
-        if fact_mode:
-            system_prompt = (
-                style
-                + "\n\nСТРОГИЙ РЕЖИМ ФАКТОВ:"
-                + "\n1) Отвечай ТОЛЬКО по фактам из блока KNOWLEDGE."
-                + "\n2) Если факта нет в KNOWLEDGE — скажи: «В моей базе этого нет»."
-                + "\n3) Формат: сначала 2–6 пунктов фактов, затем 1–2 предложения в стиле автора."
-                + "\n\nKNOWLEDGE:\n" + rag_text
-            )
-        else:
-            system_prompt = (
-                style
-                + "\n\nЕсли в KNOWLEDGE есть полезные сведения — используй их. Не выдумывай даты."
-                + (("\n\nKNOWLEDGE:\n" + rag_text) if rag_text else "")
-            )
-
-        # если ИИ недоступен — fallback фактами
+        # Если ИИ недоступен — fallback: покажем, что нашёл RAG, либо скажем что ИИ недоступен
         if not self.client:
             if rag_text:
-                return "Вот что есть в базе:\n\n" + rag_text
+                return rag_text
             return "ИИ временно недоступен. Попробуйте позже."
 
         messages = [Messages(role=MessagesRole.SYSTEM, content=system_prompt)]
 
-        # история только если не факт-режим (чтобы не ломать точность)
-        if not fact_mode and conversation_history:
-            for msg in conversation_history[-4:]:
-                role = MessagesRole.USER if msg["role"] == "user" else MessagesRole.ASSISTANT
-                messages.append(Messages(role=role, content=msg["content"]))
+        # История диалога (чтобы бот нормально “помнил” контекст)
+        if conversation_history:
+            for msg in conversation_history[-6:]:
+                role = MessagesRole.USER if msg.get("role") == "user" else MessagesRole.ASSISTANT
+                messages.append(Messages(role=role, content=msg.get("content", "")))
 
         messages.append(Messages(role=MessagesRole.USER, content=user_message))
 
         try:
             response = await asyncio.to_thread(
                 self.client.chat,
-                Chat(messages=messages, model="GigaChat:latest", temperature=0.65 if fact_mode else 0.75)
+                Chat(messages=messages, model="GigaChat:latest", temperature=0.78)
             )
             return response.choices[0].message.content.strip()
         except Exception:
+            # Если упало — попробуем хотя бы вернуть RAG, чтобы ответ был не пустой
             if rag_text:
-                return "Вот что есть в базе:\n\n" + rag_text
+                return rag_text
             return "Простите, я не смог ответить. Попробуйте переформулировать."
 
     async def compare_authors(self, narrator_author_key: str, a1: str, a2: str) -> str:
-        card1 = get_author_card(a1)
-        card2 = get_author_card(a2)
-
-        if not card1 or not card2:
-            return "Не могу сравнить — не нашёл одного из авторов в базе."
-
-        facts1 = format_compare_facts(card1)
-        facts2 = format_compare_facts(card2)
-
-        # fallback без ИИ
-        if not self.client:
-            return (
-                f"🆚 <b>{card1['full_name']}</b> vs <b>{card2['full_name']}</b>\n\n"
-                f"<b>{card1['full_name']}:</b>\n<pre>{facts1}</pre>\n\n"
-                f"<b>{card2['full_name']}:</b>\n<pre>{facts2}</pre>"
-            )
+        """
+        Сравнение БЕЗ строгих фактов.
+        При желании можно использовать RAG по каждому автору как подсказку.
+        """
+        # RAG подсказки по авторам
+        rag_a1 = format_rag_blocks(rag_search(a1, "биография стиль произведения темы", limit=7)).strip()
+        rag_a2 = format_rag_blocks(rag_search(a2, "биография стиль произведения темы", limit=7)).strip()
 
         style = self._author_style_prompt(narrator_author_key)
+
         system_prompt = (
             style
-            + "\n\nСравни двух авторов СТРОГО по фактам ниже. Запрещено выдумывать даты/произведения."
-            + "\nФормат:"
-            + "\n🆚 Автор1 vs Автор2"
-            + "\n📚 Произведения"
-            + "\n🧠 Темы/мировоззрение"
-            + "\n✍️ Манера/стиль"
-            + "\n✅ 3 вывода"
-            + "\n\nFACTS_A:\n" + facts1
-            + "\n\nFACTS_B:\n" + facts2
+            + "\n\nСравни двух авторов. Можно опираться на свои знания и подсказки ниже.\n"
+              "Формат:\n"
+              "🆚 Автор1 vs Автор2\n"
+              "📚 Произведения\n"
+              "🧠 Темы/мировоззрение\n"
+              "✍️ Манера/стиль\n"
+              "✅ 3 вывода\n"
         )
+
+        if rag_a1:
+            system_prompt += "\n\nПОДСКАЗКИ ПО АВТОРУ 1:\n" + rag_a1
+        if rag_a2:
+            system_prompt += "\n\nПОДСКАЗКИ ПО АВТОРУ 2:\n" + rag_a2
+
+        if not self.client:
+            # fallback без ИИ
+            text = "ИИ временно недоступен.\n"
+            if rag_a1 or rag_a2:
+                text += "\n" + "\n".join([x for x in [rag_a1, rag_a2] if x])
+            return text
 
         messages = [
             Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-            Messages(role=MessagesRole.USER, content="Сравни этих двух авторов по фактам выше.")
+            Messages(role=MessagesRole.USER, content=f"Сравни авторов: {a1} и {a2}.")
         ]
 
         try:
             response = await asyncio.to_thread(
                 self.client.chat,
-                Chat(messages=messages, model="GigaChat:latest", temperature=0.6)
+                Chat(messages=messages, model="GigaChat:latest", temperature=0.7)
             )
             return response.choices[0].message.content.strip()
         except Exception:
-            return (
-                f"🆚 <b>{card1['full_name']}</b> vs <b>{card2['full_name']}</b>\n\n"
-                f"<b>{card1['full_name']}:</b>\n<pre>{facts1}</pre>\n\n"
-                f"<b>{card2['full_name']}:</b>\n<pre>{facts2}</pre>"
-            )
+            if rag_a1 or rag_a2:
+                return "\n\n".join([x for x in [rag_a1, rag_a2] if x])
+            return "Не получилось сравнить. Попробуйте ещё раз."
 
 
 gigachat_client = GigaChatClient(GIGACHAT_CREDENTIALS)
