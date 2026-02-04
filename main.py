@@ -11,7 +11,6 @@ from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramConflictError
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -43,10 +42,6 @@ LOCK_STALE_SECONDS = int(os.getenv("BOT_LOCK_STALE_SECONDS", "1800"))  # 30 ми
 
 
 def acquire_single_instance_lock() -> int:
-    """
-    Создаёт lock-файл атомарно. Если уже существует — значит бот запущен второй раз.
-    Важно: lock работает только внутри одного инстанса/контейнера.
-    """
     flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
     try:
         fd = os.open(LOCK_PATH, flags)
@@ -54,12 +49,11 @@ def acquire_single_instance_lock() -> int:
         os.write(fd, payload.encode("utf-8"))
         return fd
     except FileExistsError:
-        # Попробуем убрать "зависший" lock, если он старый
+        # Если lock "завис" — удалим по TTL
         try:
-            mtime = os.path.getmtime(LOCK_PATH)
-            age = time.time() - mtime
+            age = time.time() - os.path.getmtime(LOCK_PATH)
             if age > LOCK_STALE_SECONDS:
-                logger.warning("🧹 Lock-файл старый (%.0fs). Удаляю и пробую снова...", age)
+                logger.warning("🧹 Lock старый (%.0fs). Удаляю...", age)
                 try:
                     os.remove(LOCK_PATH)
                 except Exception:
@@ -72,8 +66,8 @@ def acquire_single_instance_lock() -> int:
             pass
 
         raise RuntimeError(
-            "Бот уже запущен в другом процессе. "
-            "Останови второй запуск/инстанс или подожди, пока старый процесс завершится."
+            "Бот уже запущен в другом процессе (TelegramConflictError). "
+            "Останови второй запуск/деплой или дождись завершения старого процесса."
         )
 
 
@@ -204,28 +198,100 @@ def get_admin_keyboard():
 
 
 # =========================
-# 🌐 Мини-сервер для Render/Railway (слушаем PORT)
+# ✅ Админ callback-кнопки (чтобы панель реально работала)
 # =========================
-async def start_web_server() -> None:
-    async def health(_request: web.Request) -> web.Response:
-        return web.Response(text="OK")
+@router.callback_query(F.data == "admin_whoami")
+async def cb_admin_whoami(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    track_user(user_id)
+    await callback.answer()
+    await callback.message.answer(f"🆔 Ваш ID: <code>{user_id}</code>", parse_mode=ParseMode.HTML)
 
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
 
-    runner = web.AppRunner(app)
-    await runner.setup()
+@router.callback_query(F.data == "admin_stats")
+async def cb_admin_stats(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    track_user(user_id)
 
-    port = int(os.getenv("PORT", "10000"))
-    site = web.TCPSite(runner, host="0.0.0.0", port=port)
-    await site.start()
+    if not is_admin(user_id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
 
-    logger.info("🌐 Web server started on 0.0.0.0:%s", port)
+    users = get_all_users()
+    banned = get_banned()
+
+    await callback.answer()
+    await callback.message.answer(
+        "📊 <b>Статистика</b>\n\n"
+        f"👥 Пользователей: <b>{len(users)}</b>\n"
+        f"🚫 В бане: <b>{len(banned)}</b>\n\n"
+        "<i>Пользователь попадает в базу, когда пишет боту или нажимает /start.</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == "admin_broadcast_help")
+async def cb_admin_broadcast_help(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    track_user(user_id)
+
+    if not is_admin(user_id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.message.answer(
+        "📣 <b>Рассылка</b>\n\n"
+        "Команда:\n"
+        "<code>/broadcast ТЕКСТ</code>\n\n"
+        "Пример:\n"
+        "<code>/broadcast Всем привет! Завтра обновление бота.</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == "admin_ban_help")
+async def cb_admin_ban_help(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    track_user(user_id)
+
+    if not is_admin(user_id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.message.answer(
+        "🚫 <b>Бан</b>\n\n"
+        "Команда:\n"
+        "<code>/ban USER_ID</code>\n\n"
+        "Пример:\n"
+        "<code>/ban 123456789</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == "admin_unban_help")
+async def cb_admin_unban_help(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    track_user(user_id)
+
+    if not is_admin(user_id):
+        await callback.answer("⛔ Нет доступа", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.message.answer(
+        "✅ <b>Разбан</b>\n\n"
+        "Команда:\n"
+        "<code>/unban USER_ID</code>\n\n"
+        "Пример:\n"
+        "<code>/unban 123456789</code>",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 # =========================
-# 🤖 Админ-команды
+# Админ-команды
 # =========================
 @router.message(Command("whoami"))
 async def cmd_whoami(message: Message):
@@ -267,8 +333,7 @@ async def cmd_stats(message: Message):
     await message.answer(
         "📊 <b>Статистика</b>\n\n"
         f"👥 Пользователей: <b>{len(users)}</b>\n"
-        f"🚫 В бане: <b>{len(banned)}</b>\n\n"
-        "<i>База пополняется, когда пользователь пишет боту или нажимает /start.</i>",
+        f"🚫 В бане: <b>{len(banned)}</b>\n",
         parse_mode=ParseMode.HTML,
     )
 
@@ -356,6 +421,27 @@ async def cmd_broadcast(message: Message):
 
 
 # =========================
+# 🌐 Мини-сервер для Render/Railway (слушаем PORT) — один хост
+# =========================
+async def start_web_server() -> None:
+    async def health(_request: web.Request) -> web.Response:
+        return web.Response(text="OK")
+
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", "10000"))
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+
+    logger.info("🌐 Web server started on 0.0.0.0:%s", port)
+
+
+# =========================
 # 🤖 Основные команды/кнопки
 # =========================
 @router.message(CommandStart())
@@ -368,18 +454,20 @@ async def cmd_start(message: Message):
         return
 
     db.reset_compare(user_id)
+    db.set_mode(user_id, None)
 
     user_name = message.from_user.first_name if message.from_user else "Друг"
     text = (
         f"✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨\n\n"
         f"👋 <b>Привет, {user_name}!</b>\n\n"
-        "📚 Сначала выбери <b>сборник/эпоху</b>, затем автора.\n"
+        "📚 Сначала выбери <b>эпоху</b>, затем автора.\n"
         "🎭 Пиши вопросы — отвечу в стиле писателя.\n"
         "✍️ Можно писать произведение вместе.\n\n"
         "👇 <b>Выберите эпоху:</b>"
     )
     await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_groups_keyboard())
 
+    # Админ-панель показываем только админу
     if is_admin(user_id):
         await message.answer(
             "🛠 <b>Админ-панель</b>",
@@ -401,7 +489,7 @@ async def cmd_help(message: Message):
 
 
 @router.callback_query(F.data == "groups_menu")
-async def groups_menu(callback: CallbackQuery):
+async def cb_groups_menu(callback: CallbackQuery):
     user_id = callback.from_user.id
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
@@ -415,7 +503,7 @@ async def groups_menu(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("group_"))
-async def group_selected(callback: CallbackQuery):
+async def cb_group_selected(callback: CallbackQuery):
     group_key = callback.data.split("_", 1)[1]
     await callback.message.edit_text(
         "👥 <b>Выберите автора:</b>",
@@ -426,7 +514,7 @@ async def group_selected(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "change_author")
-async def change_author(callback: CallbackQuery):
+async def cb_change_author(callback: CallbackQuery):
     user_id = callback.from_user.id
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
@@ -440,7 +528,7 @@ async def change_author(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "reset_chat")
-async def reset_chat(callback: CallbackQuery):
+async def cb_reset_chat(callback: CallbackQuery):
     user_id = callback.from_user.id
     db.reset_dialog(user_id, keep_author=True)
     db.set_mode(user_id, None)
@@ -454,7 +542,7 @@ async def reset_chat(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "clear_all")
-async def clear_all(callback: CallbackQuery):
+async def cb_clear_all(callback: CallbackQuery):
     user_id = callback.from_user.id
     db.clear_all(user_id)
 
@@ -468,17 +556,13 @@ async def clear_all(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "main_menu")
-async def main_menu(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    db.reset_compare(user_id)
-    db.set_mode(user_id, None)
-
+async def cb_main_menu(callback: CallbackQuery):
     await cmd_start(callback.message)
     await callback.answer()
 
 
 @router.callback_query(F.data == "cowrite")
-async def cowrite_start(callback: CallbackQuery):
+async def cb_cowrite_start(callback: CallbackQuery):
     user_id = callback.from_user.id
     user_data = db.get_user_data(user_id)
 
@@ -503,7 +587,7 @@ async def cowrite_start(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.in_({"cowrite_prose", "cowrite_poem"}))
-async def cowrite_mode_selected(callback: CallbackQuery):
+async def cb_cowrite_mode_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
     mode = callback.data
     db.set_mode(user_id, mode)
@@ -545,7 +629,7 @@ async def cb_compare_authors(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("author_"))
-async def author_selected(callback: CallbackQuery):
+async def cb_author_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
     author_key = callback.data.split("_", 1)[1]
 
@@ -752,16 +836,11 @@ async def handle_message(message: Message):
         )
 
 
-# =========================
-# 🚀 Запуск
-# =========================
 async def main():
-    logger.info("BOOT: pid=%s", os.getpid())
-
     if not BOT_TOKEN:
         raise RuntimeError("❌ BOT_TOKEN пуст. Добавь BOT_TOKEN в переменные окружения / .env")
 
-    # 🔒 Запрещаем запуск двух экземпляров одновременно (в рамках одного контейнера)
+    # 🔒 Запрещаем запуск двух экземпляров одновременно
     lock_fd = None
     try:
         lock_fd = acquire_single_instance_lock()
@@ -781,10 +860,9 @@ async def main():
             except Exception:
                 pass
 
-    # Web server для Render
     await start_web_server()
 
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(token=BOT_TOKEN)  # parse_mode ставим в message.answer
     dp = Dispatcher()
 
     limiter = InMemoryRateLimiter(RateLimitConfig())
@@ -801,13 +879,6 @@ async def main():
     logger.info("🤖 Start polling...")
     try:
         await dp.start_polling(bot)
-    except TelegramConflictError:
-        # Главное: не спамить логами — просто выходим.
-        logger.error(
-            "⚠️ TelegramConflictError: Telegram видит второй getUpdates. "
-            "Этот процесс завершится. Проверь, что в Render 1 instance и нет второго сервиса/воркера."
-        )
-        return
     finally:
         _cleanup()
 
