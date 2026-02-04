@@ -1,64 +1,55 @@
+# inline_keyboards.py
+
+from typing import List, Tuple
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from authors import get_groups, get_authors_by_group
 
 
-def get_groups_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for g in get_groups():
-        builder.add(InlineKeyboardButton(text=g["title"], callback_data=f'group_{g["key"]}'))
-    builder.adjust(1)
-    return builder.as_markup()
+# Настройка: сколько кнопок в ряд
+GROUPS_PER_ROW = 2     # эпохи (группы) — 2 в ряд
+AUTHORS_PER_ROW = 3    # авторы — 3 в ряд (можно поставить 2)
 
 
-def get_authors_keyboard(group_key: str) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    authors = get_authors_by_group(group_key)
-    for a in authors:
-        builder.add(InlineKeyboardButton(text=a["name"], callback_data=f'author_{a["key"]}'))
-
-    builder.row(InlineKeyboardButton(text="⬅️ Назад к эпохам", callback_data="groups_menu"))
-    builder.adjust(1)
-    return builder.as_markup()
+def _chunk_buttons(buttons: List[InlineKeyboardButton], per_row: int) -> List[List[InlineKeyboardButton]]:
+    """Разбить список кнопок на строки по per_row"""
+    per_row = max(1, int(per_row))
+    return [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
 
 
-def get_chat_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
+def groups_keyboard() -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора эпох (групп).
+    callback_data: group:<group_name>
+    """
+    groups = get_groups()
 
-    builder.row(
-        InlineKeyboardButton(text="💬 Диалог авторов", callback_data="mode_dialog"),
-    )
+    buttons = [
+        InlineKeyboardButton(text=g, callback_data=f"group:{g}")
+        for g in groups
+    ]
 
-    builder.row(
-        InlineKeyboardButton(text="✍️ Соавторство", callback_data="cowrite"),
-        InlineKeyboardButton(text="🆚 Сравнить авторов", callback_data="compare_authors"),
-    )
+    rows = _chunk_buttons(buttons, GROUPS_PER_ROW)
 
-    builder.row(
-        InlineKeyboardButton(text="🔁 Сменить автора", callback_data="change_author"),
-        InlineKeyboardButton(text="🔄 Очистить диалог", callback_data="reset_chat"),
-    )
-
-    builder.row(
-        InlineKeyboardButton(text="🧹 Очистить всё", callback_data="clear_all"),
-        InlineKeyboardButton(text="🏠 В главное меню", callback_data="main_menu"),
-    )
-
-    return builder.as_markup()
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def get_cowrite_mode_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="📖 Проза", callback_data="cowrite_prose"),
-        InlineKeyboardButton(text="🪶 Стихи", callback_data="cowrite_poem"),
-    )
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu"))
-    return builder.as_markup()
+def authors_keyboard(group: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора автора внутри эпохи.
+    callback_data: author:<author_key>
+    """
+    authors = get_authors_by_group(group)  # dict: key -> name
 
+    buttons = [
+        InlineKeyboardButton(text=name, callback_data=f"author:{key}")
+        for key, name in authors.items()
+    ]
 
-def get_back_to_chat_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⬅️ В обычный диалог", callback_data="back_to_chat"))
-    return builder.as_markup()
+    rows = _chunk_buttons(buttons, AUTHORS_PER_ROW)
+
+    # Кнопка назад
+    rows.append([InlineKeyboardButton(text="⬅ Назад", callback_data="back:groups")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
