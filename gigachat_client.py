@@ -40,8 +40,8 @@ class GigaChatClient:
 
     def _author_style_prompt(self, author_key: str) -> str:
         """
-        1) Пытаемся взять system_prompt из authors.py
-        2) Если его нет — используем старый fallback styles
+        1) Берём `system_prompt` из authors.py (он содержит защиту от подмены автора)
+        2) Если его нет — используем fallback-стили
         """
         author = get_author(author_key) or {}
         system_prompt = (author.get("system_prompt") or "").strip()
@@ -55,6 +55,7 @@ class GigaChatClient:
             "tolstoy": "Ты — Лев Николаевич Толстой. Мудро и просто. Даты не выдумывай.",
             "gogol": "Ты — Николай Васильевич Гоголь. Иронично и образно. Даты не выдумывай.",
             "chekhov": "Ты — Антон Павлович Чехов. Коротко и точно. Даты не выдумывай.",
+            "filatov": "Ты — Леонид Филатов. Иронично, сатирично, разговорно-точно. Даты не выдумывай.",
             "gigachad": "Ты — Гигачад. Энергично и мотивирующе. Но факты не выдумывай.",
         }
         return styles.get(author_key, "Ты — русский писатель. Отвечай умно и без выдуманных фактов.")
@@ -69,23 +70,54 @@ class GigaChatClient:
         blocks = rag_search(author_key, user_message, limit=7)
         rag_text = format_rag_blocks(blocks)
 
-        fact_mode = _is_fact_question(user_message) and bool(rag_text)
+        fact_mode = _is_fact_question(user_message)
         style = self._author_style_prompt(author_key)
 
         if fact_mode:
-            system_prompt = (
-                style
-                + "\n\nСТРОГИЙ РЕЖИМ ФАКТОВ:"
-                + "\n1) Отвечай ТОЛЬКО по фактам из блока KNOWLEDGE."
-                + "\n2) Если факта нет в KNOWLEDGE — скажи: «В моей базе этого нет»."
-                + "\n3) Формат: сначала 2–6 пунктов фактов, затем 1–2 предложения в стиле автора."
-                + "\n\nKNOWLEDGE:\n" + rag_text
-            )
-        else:
-            system_prompt = (
-                style
-                + "\n\nЕсли в KNOWLEDGE есть полезные сведения — используй их. Не выдумывай даты."
-                + (("\n\nKNOWLEDGE:\n" + rag_text) if rag_text else "")
+    # Факт-вопрос: запрещаем выдумывать. Если KNOWLEDGE пуст — честно сообщаем.
+    if rag_text:
+        system_prompt = (
+            style
+            + "
+
+СТРОГИЙ РЕЖИМ ФАКТОВ:"
+            + "
+1) Отвечай ТОЛЬКО по фактам из блока KNOWLEDGE."
+            + "
+2) Если факта нет в KNOWLEDGE — скажи: «В моей базе этого нет»."
+            + "
+3) Если в KNOWLEDGE речь о другом авторе/персоне — скажи о несоответствии и НЕ подменяй автора."
+            + "
+4) Формат: сначала 2–6 пунктов фактов, затем 1–2 предложения в стиле автора."
+            + "
+
+KNOWLEDGE:
+" + rag_text
+        )
+    else:
+        system_prompt = (
+            style
+            + "
+
+СТРОГИЙ РЕЖИМ ФАКТОВ:"
+            + "
+Если в KNOWLEDGE нет сведений — отвечай: «В моей базе этого нет»."
+            + "
+Запрещено выдумывать даты/факты/произведения."
+        )
+else:
+    system_prompt = (
+        style
+        + "
+
+Если в KNOWLEDGE есть полезные сведения — используй их. Не выдумывай даты."
+        + "
+Если в KNOWLEDGE явно про другого автора — сообщи о несоответствии и игнорируй чужой контекст."
+        + (("
+
+KNOWLEDGE:
+" + rag_text) if rag_text else "")
+    )
             )
 
         # если ИИ недоступен — fallback фактами
