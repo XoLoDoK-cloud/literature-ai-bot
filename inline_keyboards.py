@@ -8,8 +8,15 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from authors import get_groups, get_authors_by_group
 
 
+# ===== Настройки "адаптива" =====
 GROUPS_PER_ROW = 2
-AUTHORS_PER_ROW = 3
+
+# Базово хотим 2 в ряд (мобильно)
+AUTHORS_PER_ROW_DEFAULT = 2
+
+# Если ФИО слишком длинные — на телефоне будет резать, поэтому делаем 1 в ряд
+# Подбери число под себя: 18–22 обычно нормально
+AUTHOR_TEXT_LEN_FOR_SINGLE_ROW = 20
 
 
 def _chunk(buttons: List[InlineKeyboardButton], per_row: int) -> List[List[InlineKeyboardButton]]:
@@ -17,58 +24,57 @@ def _chunk(buttons: List[InlineKeyboardButton], per_row: int) -> List[List[Inlin
     return [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
 
 
-def _short_author_button_text(full_name: str) -> str:
+def _authors_per_row_by_length(author_names: List[str]) -> int:
     """
-    Вариант 1: Фамилия + инициалы (если 3 слова)
-      'Александр Сергеевич Пушкин' -> 'Пушкин А. С.'
-    Вариант 2: только фамилия (если имя нестандартное)
-      'Михаил Булгаков' -> 'Булгаков'
-      'Иосиф Александрович Бродский' -> 'Бродский И. А.' (если 3 слова)
+    Адаптация под телефон:
+    - если есть длинные ФИО -> 1 в ряд (чтобы не резало)
+    - иначе -> 2 в ряд
     """
-    name = (full_name or "").strip()
-    if not name:
-        return "Автор"
-
-    parts = name.split()
-    # Обычный случай: Фамилия Имя Отчество
-    if len(parts) == 3:
-        last, first, middle = parts
-        # защита от пустых строк
-        first_i = (first[0] + ".") if first else ""
-        middle_i = (middle[0] + ".") if middle else ""
-        return f"{last} {first_i} {middle_i}".strip()
-
-    # Если больше 3 слов — берём первую часть как фамилию (вариант 2)
-    # Если меньше 3 слов — тоже только фамилия
-    return parts[0]
+    if not author_names:
+        return AUTHORS_PER_ROW_DEFAULT
+    longest = max(len((n or "").strip()) for n in author_names)
+    return 1 if longest >= AUTHOR_TEXT_LEN_FOR_SINGLE_ROW else AUTHORS_PER_ROW_DEFAULT
 
 
+# =========================
+# 📚 ВЫБОР ЭПОХИ
+# =========================
 def get_groups_keyboard() -> InlineKeyboardMarkup:
     groups = get_groups()
     buttons = [InlineKeyboardButton(text=g, callback_data=f"group_{g}") for g in groups]
     return InlineKeyboardMarkup(inline_keyboard=_chunk(buttons, GROUPS_PER_ROW))
 
 
+# =========================
+# 👤 ВЫБОР АВТОРА (полное ФИО + адаптация рядов)
+# =========================
 def get_authors_keyboard(group: str) -> InlineKeyboardMarkup:
-    authors = get_authors_by_group(group)  # key -> name
+    authors = get_authors_by_group(group)  # key -> full name (уже отсортировано)
+    names = list(authors.values())
+
+    per_row = _authors_per_row_by_length(names)
 
     buttons = [
-        InlineKeyboardButton(
-            text=_short_author_button_text(name),
-            callback_data=f"author_{key}"
-        )
+        InlineKeyboardButton(text=name, callback_data=f"author_{key}")
         for key, name in authors.items()
     ]
 
-    rows = _chunk(buttons, AUTHORS_PER_ROW)
+    rows = _chunk(buttons, per_row)
+
     rows.append([InlineKeyboardButton(text="⬅ Назад", callback_data="groups_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# =========================
+# 💬 КЛАВИАТУРА ЧАТА (мобильная)
+# =========================
 def get_chat_keyboard() -> InlineKeyboardMarkup:
+    # На телефоне лучше, когда не всё в одной широкой строке
     rows = [
         [
             InlineKeyboardButton(text="🆚 Сравнить авторов", callback_data="compare_authors"),
+        ],
+        [
             InlineKeyboardButton(text="✍️ Соавторство", callback_data="cowrite"),
         ],
         [
@@ -82,6 +88,9 @@ def get_chat_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# =========================
+# ✍️ СОАВТОРСТВО (мобильное)
+# =========================
 def get_cowrite_mode_keyboard() -> InlineKeyboardMarkup:
     rows = [
         [
