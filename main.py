@@ -1,6 +1,9 @@
 import os
 import asyncio
 import logging
+import atexit
+import signal
+import time
 
 from aiohttp import web
 
@@ -26,7 +29,61 @@ from rate_limit import RateLimitConfig, InMemoryRateLimiter, AntiFloodMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-router = Router()
+router = Router\(\)
+
+# =========================
+# 🔒 Single-instance lock (защита от двойного polling)
+# =========================
+LOCK_PATH = os.getenv("BOT_LOCK_PATH", "/tmp/literature_bot.lock")
+LOCK_STALE_SECONDS = int(os.getenv("BOT_LOCK_STALE_SECONDS", "1800"))  # 30 минут
+
+
+def acquire_single_instance_lock() -> int:
+    """Создаёт lock-файл атомарно. Если уже существует — значит бот запущен второй раз."""
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+    try:
+        fd = os.open(LOCK_PATH, flags)
+        payload = f"pid={os.getpid()}
+started={int(time.time())}
+"
+        os.write(fd, payload.encode("utf-8"))
+        return fd
+    except FileExistsError:
+        # Попробуем убрать "зависший" lock, если он старый
+        try:
+            mtime = os.path.getmtime(LOCK_PATH)
+            age = time.time() - mtime
+            if age > LOCK_STALE_SECONDS:
+                logger.warning("🧹 Lock-файл старый (%.0fs). Удаляю и пробую снова...", age)
+                try:
+                    os.remove(LOCK_PATH)
+                except Exception:
+                    pass
+                fd = os.open(LOCK_PATH, flags)
+                payload = f"pid={os.getpid()}
+started={int(time.time())}
+"
+                os.write(fd, payload.encode("utf-8"))
+                return fd
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            "Бот уже запущен в другом процессе (TelegramConflictError). "
+            "Останови второй запуск (локально/другой деплой) или подожди, пока старый процесс завершится."
+        )
+
+
+def release_single_instance_lock(fd: int) -> None:
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+    try:
+        os.remove(LOCK_PATH)
+    except Exception:
+        pass
+
 
 # =========================
 # 🛠 Админ-настройки (кнопки видны только админам)
@@ -565,6 +622,24 @@ async def handle_message(message: Message):
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("❌ BOT_TOKEN пуст. Добавь BOT_TOKEN в переменные окружения / .env")
+
+    # 🔒 Запрещаем запуск двух экземпляров одновременно
+    try:
+        lock_fd = acquire_single_instance_lock()
+    except Exception as e:
+        logger.error(str(e))
+        return
+
+    def _cleanup(*_args):
+        release_single_instance_lock(lock_fd)
+
+    atexit.register(_cleanup)
+    for _sig in (getattr(signal, 'SIGTERM', None), getattr(signal, 'SIGINT', None)):
+        if _sig is not None:
+            try:
+                signal.signal(_sig, lambda *_: (_cleanup(), os._exit(0)))
+            except Exception:
+                pass
 
     # 1) стартуем web-сервер (порт)
     await start_web_server()
