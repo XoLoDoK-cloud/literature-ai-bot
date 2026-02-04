@@ -165,6 +165,7 @@ def _stats_default() -> Dict[str, Any]:
     return {
         "users_last_seen": {},     # user_id -> unix_ts
         "usernames": {},           # user_id -> username (без @)
+        "first_names": {},         # user_id -> first_name
         "messages_total": 0,
         "messages_by_user": {},    # user_id -> count
         "commands": {},            # "/start" -> count
@@ -180,17 +181,20 @@ def _save_stats(stats: Dict[str, Any]) -> None:
     _save_json(_stats_path(), stats)
 
 
-def mark_seen(user_id: int, username: str | None = None) -> None:
+def mark_seen(user_id: int, username: str | None = None, first_name: str | None = None) -> None:
     stats = _load_stats()
 
     stats.setdefault("users_last_seen", {})
     stats.setdefault("usernames", {})
+    stats.setdefault("first_names", {})
 
     uid = str(int(user_id))
     stats["users_last_seen"][uid] = int(time.time())
 
     if username:
         stats["usernames"][uid] = username
+    if first_name:
+        stats["first_names"][uid] = first_name
 
     _save_stats(stats)
 
@@ -245,6 +249,17 @@ def _top_items(d: Dict[str, Any], n: int = 5) -> list[tuple[str, int]]:
     return items[:n]
 
 
+def _safe_html(text: str) -> str:
+    # Чтобы имя не ломало HTML (на случай < > &)
+    return (
+        (text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .strip()
+    )
+
+
 def format_admin_stats() -> str:
     users = get_all_users()
     stats = _load_stats()
@@ -266,15 +281,19 @@ def format_admin_stats() -> str:
     lines.append(f"💬 Сообщений всего: <b>{int(stats.get('messages_total', 0))}</b>")
 
     usernames = stats.get("usernames", {}) or {}
+    first_names = stats.get("first_names", {}) or {}
 
     if top_users:
         lines.append("\n🔥 <b>Самые активные пользователи</b>")
         for uid, cnt in top_users:
+            fname = _safe_html(first_names.get(uid, "Без имени"))
             uname = usernames.get(uid)
+
             if uname:
-                title = f"@{uname} (<code>{uid}</code>)"
+                title = f"{fname} (@{_safe_html(uname)}) <code>{uid}</code>"
             else:
-                title = f"Без ника (<code>{uid}</code>)"
+                title = f"{fname} <code>{uid}</code>"
+
             lines.append(f"• {title} — <b>{cnt}</b> сообщений")
 
     if top_auth:
@@ -308,7 +327,7 @@ def get_admin_keyboard():
 async def cb_admin_whoami(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
     await callback.answer()
     await callback.message.answer(f"🆔 Ваш ID: <code>{user_id}</code>", parse_mode=ParseMode.HTML)
 
@@ -317,7 +336,7 @@ async def cb_admin_whoami(callback: CallbackQuery):
 async def cb_admin_stats(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     if not is_admin(user_id):
         await callback.answer("⛔ Нет доступа", show_alert=True)
@@ -331,7 +350,7 @@ async def cb_admin_stats(callback: CallbackQuery):
 async def cb_admin_broadcast_help(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     if not is_admin(user_id):
         await callback.answer("⛔ Нет доступа", show_alert=True)
@@ -355,7 +374,7 @@ async def cb_admin_broadcast_help(callback: CallbackQuery):
 async def cmd_whoami(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-    mark_seen(user_id, message.from_user.username)
+    mark_seen(user_id, message.from_user.username, message.from_user.first_name)
     inc_command("/whoami")
     await message.answer(f"🆔 Ваш ID: <code>{user_id}</code>", parse_mode=ParseMode.HTML)
 
@@ -364,7 +383,7 @@ async def cmd_whoami(message: Message):
 async def cmd_admin(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-    mark_seen(user_id, message.from_user.username)
+    mark_seen(user_id, message.from_user.username, message.from_user.first_name)
     inc_command("/admin")
 
     if not is_admin(user_id):
@@ -385,7 +404,7 @@ async def cmd_admin(message: Message):
 async def cmd_stats(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-    mark_seen(user_id, message.from_user.username)
+    mark_seen(user_id, message.from_user.username, message.from_user.first_name)
     inc_command("/stats")
 
     if not is_admin(user_id):
@@ -399,7 +418,7 @@ async def cmd_stats(message: Message):
 async def cmd_broadcast(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-    mark_seen(user_id, message.from_user.username)
+    mark_seen(user_id, message.from_user.username, message.from_user.first_name)
     inc_command("/broadcast")
 
     if not is_admin(user_id):
@@ -468,7 +487,7 @@ async def start_web_server() -> None:
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-    mark_seen(user_id, message.from_user.username)
+    mark_seen(user_id, message.from_user.username, message.from_user.first_name)
     inc_command("/start")
 
     db.reset_compare(user_id)
@@ -477,7 +496,7 @@ async def cmd_start(message: Message):
     user_name = message.from_user.first_name if message.from_user else "Друг"
     text = (
         f"✨ <b>ЛИТЕРАТУРНЫЙ ДИАЛОГ</b> ✨\n\n"
-        f"👋 <b>Привет, {user_name}!</b>\n\n"
+        f"👋 <b>Привет, {_safe_html(user_name)}!</b>\n\n"
         "📚 Сначала выбери <b>эпоху</b>, затем автора.\n"
         "🎭 Пиши вопросы — отвечу в стиле писателя.\n"
         "✍️ Можно писать произведение вместе.\n\n"
@@ -497,7 +516,7 @@ async def cmd_start(message: Message):
 async def cmd_help(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-    mark_seen(user_id, message.from_user.username)
+    mark_seen(user_id, message.from_user.username, message.from_user.first_name)
     inc_command("/help")
 
     await message.answer(
@@ -514,7 +533,7 @@ async def cmd_help(message: Message):
 async def cb_groups_menu(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
@@ -531,7 +550,7 @@ async def cb_groups_menu(callback: CallbackQuery):
 async def cb_group_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     group_key = callback.data.split("_", 1)[1]
     await callback.message.edit_text(
@@ -546,7 +565,7 @@ async def cb_group_selected(callback: CallbackQuery):
 async def cb_change_author(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     db.reset_compare(user_id)
     db.set_mode(user_id, None)
@@ -563,7 +582,7 @@ async def cb_change_author(callback: CallbackQuery):
 async def cb_reset_chat(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     db.reset_dialog(user_id, keep_author=True)
     db.set_mode(user_id, None)
@@ -580,7 +599,7 @@ async def cb_reset_chat(callback: CallbackQuery):
 async def cb_clear_all(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     db.clear_all(user_id)
 
@@ -597,7 +616,7 @@ async def cb_clear_all(callback: CallbackQuery):
 async def cb_main_menu(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     await cmd_start(callback.message)
     await callback.answer()
@@ -607,7 +626,7 @@ async def cb_main_menu(callback: CallbackQuery):
 async def cb_cowrite_start(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     user_data = db.get_user_data(user_id)
 
@@ -635,7 +654,7 @@ async def cb_cowrite_start(callback: CallbackQuery):
 async def cb_cowrite_mode_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     mode = callback.data
     db.set_mode(user_id, mode)
@@ -655,7 +674,7 @@ async def cb_cowrite_mode_selected(callback: CallbackQuery):
 async def cb_compare_authors(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     user_data = db.get_user_data(user_id)
 
@@ -683,7 +702,7 @@ async def cb_compare_authors(callback: CallbackQuery):
 async def cb_author_selected(callback: CallbackQuery):
     user_id = callback.from_user.id
     track_user(user_id)
-    mark_seen(user_id, callback.from_user.username)
+    mark_seen(user_id, callback.from_user.username, callback.from_user.first_name)
 
     author_key = callback.data.split("_", 1)[1]
 
@@ -773,7 +792,7 @@ async def cb_author_selected(callback: CallbackQuery):
 async def handle_message(message: Message):
     user_id = message.from_user.id
     track_user(user_id)
-    mark_seen(user_id, message.from_user.username)
+    mark_seen(user_id, message.from_user.username, message.from_user.first_name)
     inc_message(user_id)
 
     user_text = (message.text or "").strip()
